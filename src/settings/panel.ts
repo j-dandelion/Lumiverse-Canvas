@@ -129,6 +129,8 @@ const RESIZE_PANELS_HINT =
   'Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.'
 const DEBUG_HINT =
   'Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.'
+const UNHIDE_VANILLA_TABS_HINT =
+  "Keeps Lumiverse's hidden-tab list empty so Canvas can access every panel. Panels hidden in both places are unhidden in Canvas too; other Canvas-only Configure Tabs hides stay. Turning this off stops automatic un-hiding but does not re-hide panels already shown."
 
 // Captured SpindleFrontendContext from mountSettingsPanel. The live-apply
 // dispatch path (settings/state.setSettings → applySettings) needs the
@@ -1130,6 +1132,16 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     control: slash.btn,
   }))
 
+  const unhideVanillaTabs = makeToggle(
+    () => getSettings().unhideVanillaTabs,
+    (v) => setSettings({ unhideVanillaTabs: v })
+  )
+  appendRow(misc.group, buildSettingRow({
+    label: 'Keep all Lumiverse tabs available',
+    hint: UNHIDE_VANILLA_TABS_HINT,
+    control: unhideVanillaTabs.btn,
+  }))
+
   const debugMode = makeToggle(
     () => getSettings().debugMode,
     (v) => setSettings({ debugMode: v })
@@ -1158,6 +1170,7 @@ function buildSettingsPanelDOM(): { root: HTMLElement; refresh: () => void } {
     persistOpen.refresh()
     persistWidth.refresh()
     slash.refresh()
+    unhideVanillaTabs.refresh()
     debugMode.refresh()
     shadowsDesktop.refresh()
     shadowsMobile.refresh()

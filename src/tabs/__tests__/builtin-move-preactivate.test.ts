@@ -120,7 +120,7 @@ const secTsxSrc = readFileSync(join(process.cwd(), 'src/sidebar/secondary.tsx'),
 const loopStart = secTsxSrc.indexOf('for (const [tabKey] of Array.from(getTabAssignments())')
 ok(
   loopStart !== -1 &&
-    /await assignToSecondary\(liveId, opts\)/.test(secTsxSrc.slice(loopStart, loopStart + 1200)),
+    /await assignToSecondary\(liveId, placementOpts\)/.test(secTsxSrc.slice(loopStart, loopStart + 1200)),
   'T-PRE-6: reassignSecondaryTabsFromModel places tabs serially (no Promise.all click stomp)',
 )
 ok(

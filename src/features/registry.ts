@@ -62,6 +62,7 @@ import { updateMainMirrorDrawerTabVisibility } from '../sidebar/main-mirror-draw
 import { getModel, dispatchBatch } from '../recon/dispatch'
 import { parseBuiltinKey } from '../core/model'
 import { isCoreTabId } from '../tabs/core-tabs'
+import { startUnhideVanillaTabs } from '../tabs/unhide-vanilla'
 import { drawerTabDragFeature } from './drawer-tab-position'
 
 /** A teardown returned by mount(). */
@@ -96,6 +97,38 @@ const shadowDisableCss = (media: 'min' | 'max', width: number): string => `
 `
 
 // --- Features ---
+
+let _unhideVanillaTabsTeardown: Teardown | null = null
+
+function mountUnhideVanillaTabs(): Teardown {
+  if (_unhideVanillaTabsTeardown) return _unhideVanillaTabsTeardown
+  const stop = startUnhideVanillaTabs()
+  const teardown = () => {
+    stop()
+    if (_unhideVanillaTabsTeardown === teardown) {
+      _unhideVanillaTabsTeardown = null
+    }
+  }
+  _unhideVanillaTabsTeardown = teardown
+  return teardown
+}
+
+/** Keep Lumiverse's own hidden-tab list clear while Canvas owns the opt-in. */
+const unhideVanillaTabsFeature: CanvasFeature = {
+  id: 'unhideVanillaTabs',
+  mount() {
+    return mountUnhideVanillaTabs()
+  },
+  apply(_prev, next) {
+    if (next.unhideVanillaTabs) {
+      if (!_unhideVanillaTabsTeardown) {
+        registerCleanup(mountUnhideVanillaTabs())
+      }
+      return
+    }
+    _unhideVanillaTabsTeardown?.()
+  },
+}
 
 /** Debug mode: enables [Canvas] console output + installs the escape hatch. */
 const debugFeature: CanvasFeature = {
@@ -788,6 +821,7 @@ const osWindowControlsFeature: CanvasFeature = {
 // --- Registry ---
 
 export const FEATURES: readonly CanvasFeature[] = [
+  unhideVanillaTabsFeature,
   debugFeature,
   chatReflowFeature,
   welcomeReflowFeature,

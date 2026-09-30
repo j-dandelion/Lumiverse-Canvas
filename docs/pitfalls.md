@@ -332,31 +332,6 @@ The full off-world-tab series — the LUMI-25 fix (host hidden-list union remova
 
 **Synthesized-entry key space (LUMI-31):** assignment entries are keyed by TabKey, but Canvas hidden state and active trackers use live IDs. Resolve the TabKey through `liveIdForKey` before comparing those values. A null resolution (an absent extension key within its grace window) stays unhidden and inactive; builtins still resolve without a drawer button, so DOM-placed entries report their hidden and active state correctly.
 
-## 32. Lazy extension roots must mount through the host button (LUMI-50)
-
-The host store can omit an extension entry while its button is present, and
-the host's location API is owner-scoped. On desktop, select the real host tab
-in an open main drawer while observing for its stamped content root, restore
-the prior main selection/open state, then reparent the retained root. Carry the
-frozen `TabKey` through every placement caller because extension metadata may
-still be `unknown`. Placement-first user moves have not updated the model yet;
-the post-mount race check must allow that original primary side and cancel only
-when an already-secondary tab moved back out during activation.
-
-**Move-back then move-again in OS mode:** a host button can remain selected
-after its panel root has left the main drawer. If `findRoot()` is empty and the
-host still reports that button as selected, selecting it again is a no-op.
-Select another visible main tab first, wait for that host selection to settle,
-then select the extension to mount its root. More fundamentally, the fiber
-hook-array scan can miss the host's `drawerTabs` entry while its button remains
-visible. `getHostStoreTabs()` must read the live Zustand API first; otherwise
-the observer keeps the title (`LumiBooks`) as its live ID instead of the
-canonical `spindle:…:tab:…` ID. The wrong ID loses the root on move-back, the
-next placement times out and rolls the model back to main, and a later click
-appears to open the tab in the opposite drawer. Both the owned-commit and
-placement-first paths check for the extension root after `assignToSecondary`;
-a resolved Promise alone does not mean DOM placement succeeded.
-
 ## 30. Resize drag cancellation must run the normal finish path
 
 The resize handle's content overlay blocks iframe pointer capture during a
@@ -374,3 +349,31 @@ the same renderable-key set as the strip: title the active key if it renders,
 otherwise title the rescue key when one is rendered. If OS mode has no
 renderable keys because all windows are closed, leave the header title cleared
 by D7; do not write a title from a hidden or closed active key.
+
+## 32. Keep Lumiverse tabs available is an opt-in host setting
+
+`unhideVanillaTabs` defaults off. When enabled, Canvas checks Lumiverse's live
+`drawerSettings.hiddenTabIds` and clears it through the host store setter, with
+Lumiverse's own authenticated settings API as the fallback. The check runs
+until the toggle is turned off or the extension tears down, so later hides
+made in Lumiverse's Configure Tabs are cleared too. The API path must keep its
+read-modify-write behavior: only a missing settings row (404) may start from an
+empty object; read errors must never overwrite the rest of `drawerSettings`.
+
+The API fallback is asynchronous at startup. Canvas's Configure Tabs click can
+arrive before Lumiverse has applied that write and re-mounted the extension-tab
+buttons, leaving the first catalog snapshot with built-ins only. When the opt-in
+is on, opening Configure Tabs must join/retry the initial unhide and wait for
+the host settings update plus a paint before building its catalog. Keep the
+regular one-second enforcement for later hides; this open-time wait closes the
+startup race without changing the default-off path.
+
+Before clearing a discovered host hide, the hidden-tab sync removes those same
+ids from Canvas's hidden copy, then dispatches `{t: 'setHidden', hidden: false}`
+for matching owned-model keys resolved through `HostPort.findKey`. The normal
+model persistence path therefore keeps the tabs unhidden after reload. Other
+Canvas-only Configure Tabs hides and OS closed-window state stay intact. If the
+same id was hidden in both places, it is unhidden in Canvas too. Turning the
+option off stops enforcement; it does not restore the old Lumiverse hidden
+list. Do not conflate this with `menuHiddenTabIds`, which only controls
+Start-menu listing.

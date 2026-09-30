@@ -227,6 +227,7 @@ var init_types = __esm(() => {
     drawerTabDrag: true,
     mainDrawerTabOverrideVh: undefined,
     secondaryDrawerTabOverrideVh: undefined,
+    unhideVanillaTabs: false,
     debugMode: false
   };
 });
@@ -3306,6 +3307,10 @@ function getHostDrawerSettings() {
   findHostSettings();
   return _cachedDrawerSettings;
 }
+function refreshHostDrawerSettings() {
+  findHostSettings(true);
+  return _cachedDrawerSettings;
+}
 function patchHostDrawerSettings(partial) {
   findHostSettings();
   if (_testSetSetting) {
@@ -3345,26 +3350,39 @@ function patchHostDrawerSettings(partial) {
   findStoreData(true);
   return true;
 }
-async function writeHostDrawerSettingsViaApi(patch) {
+async function writeHostDrawerSettingsViaApi(patch, signal) {
+  const controller = new AbortController;
+  const abortFromCaller = () => controller.abort();
+  if (signal?.aborted)
+    controller.abort();
+  else
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
     const doFetch = _settingsApiFetch ?? ((url, init) => fetch(url, init));
-    const signal = typeof AbortSignal !== "undefined" && "timeout" in AbortSignal ? AbortSignal.timeout(3000) : undefined;
-    const initBase = signal ? { signal } : {};
+    const initBase = { signal: controller.signal };
     let current = {};
-    try {
-      const res = await doFetch("/api/v1/settings/drawerSettings", {
-        ...initBase,
-        method: "GET",
-        credentials: "include",
-        headers: { Accept: "application/json" }
-      });
-      if (res.ok) {
-        const row = await res.json();
-        if (row && typeof row.value === "object" && row.value !== null) {
-          current = row.value;
-        }
+    const getRes = await doFetch("/api/v1/settings/drawerSettings", {
+      ...initBase,
+      method: "GET",
+      credentials: "include",
+      headers: { Accept: "application/json" }
+    });
+    if (getRes.status !== 404) {
+      if (!getRes.ok) {
+        dlog("writeHostDrawerSettingsViaApi: read rejected", { status: getRes.status });
+        return false;
       }
-    } catch {}
+      try {
+        const row = await getRes.json();
+        if (!row || typeof row.value !== "object" || row.value === null)
+          return false;
+        current = row.value;
+      } catch {
+        dlog("writeHostDrawerSettingsViaApi: unreadable settings row");
+        return false;
+      }
+    }
     const merged = { ...current, ...patch };
     const res = await doFetch("/api/v1/settings/drawerSettings", {
       ...initBase,
@@ -3382,7 +3400,16 @@ async function writeHostDrawerSettingsViaApi(patch) {
   } catch (err) {
     dlog("writeHostDrawerSettingsViaApi: failed", String(err));
     return false;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
   }
+}
+function isHostDrawerSettingsWritable() {
+  if (_testSetSetting)
+    return true;
+  findHostSettings();
+  return _cachedSetSetting !== null;
 }
 var _cachedDrawerSettings = null, _cachedSetSetting = null, _cacheTimestamp = 0, CACHE_TTL_MS = 3000, _testSetSetting = null, _settingsApiFetch = null;
 var init_host_settings = __esm(() => {
@@ -5961,6 +5988,7 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const launchIndex = placeAtEnd ? launchEndVisibleIndex(side, model.side, isHorizontalStrip()) : -1;
   const movingOutOfSecondary = !livesInTarget && side === "primary";
   const secondaryCapture = movingOutOfSecondary ? Promise.resolve().then(() => (init_dispatch(), {})).then((m) => captureSecondaryNeighborForMove(liveId)) : Promise.resolve({ neighborBtn: null });
+  const mainChrome = side === "secondary" ? captureMainMirrorMoveChrome(liveId, side) : Promise.resolve(null);
   const unhide = isHidden ? dispatchBatch([
     { t: "setHidden", key, hidden: false },
     ...livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : []
@@ -5969,18 +5997,30 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const openDrawer = drawerClosed ? dispatch({ t: "setDrawer", side, open: true }) : Promise.resolve();
   if (drawerClosed)
     commandDrawerOpen(side, true);
-  const move = livesInTarget ? Promise.resolve() : dispatchMoveByLiveId(liveId, false, launchIndex);
-  const open = dispatchBatch([
+  return Promise.all([secondaryCapture, mainChrome]).then(([secondaryChrome, mainMoveChrome]) => unhide.then(() => openDrawer).then(async () => {
+    if (side === "secondary") {
+      const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
+      await assignToSecondary(liveId, {
+        openOnClosed: false,
+        setActiveWhenReady: false
+      });
+    }
+    if (!livesInTarget) {
+      await dispatchMoveByLiveId(liveId, false, launchIndex);
+    }
+    if (mainMoveChrome) {
+      await applyMainMirrorMoveChrome(mainMoveChrome, liveId);
+    }
+  }).then(() => dispatchBatch([
     { t: "setClosed", key, closed: false },
     ...isClosed && !isHidden && livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : [],
     { t: "activate", key, side }
-  ]);
-  return secondaryCapture.then((secondaryChrome) => unhide.then(() => openDrawer).then(() => move).then(() => open).then(() => {
+  ])).then(() => {
     if (!movingOutOfSecondary)
       return;
     return releaseSecondarySource(liveId, secondaryChrome);
   }).then(() => {
-    host.activate(side, liveId);
+    return host.activate(side, liveId).then(() => {});
   }));
 }
 async function releaseSecondarySource(liveId, chrome) {
@@ -8704,7 +8744,7 @@ var init_configure_model = __esm(() => {
   init_drawer_observer();
 });
 
-// ../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
+// node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
 function m(n, l) {
   for (var u in l)
     n[u] = l[u];
@@ -9006,7 +9046,7 @@ var init_preact_module = __esm(() => {
   }, H.__r = 0, f = Math.random().toString(8), c = "__d" + f, a = "__a" + f, s = /(PointerCapture)$|Capture$/i, h = 0, p = V(false), v = V(true), y = 0;
 });
 
-// ../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
+// node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
 function p2(n, t) {
   c2.__h && c2.__h(r2, n, o2 || t), o2 = 0;
   var u = r2.__H || (r2.__H = { __: [], __h: [] });
@@ -9248,16 +9288,18 @@ function scheduleSyncHiddenTabsFromHost(opts) {
     if (!isLifecycleCurrent(armedGeneration))
       return;
     try {
-      syncHiddenTabsFromHost();
+      syncHiddenTabsFromHost({ unhideHostTabs: opts?.unhideHostTabs });
     } catch {}
   }, delayMs);
 }
-function syncHiddenTabsFromHost() {
+function syncHiddenTabsFromHost(opts) {
   if (!isInstanceActive())
     return { hiddenIds: getCanvasHiddenTabIds() };
   const host = getHostDrawerSettings();
-  const hostStored = normalizeHiddenIds(host?.hiddenTabIds);
-  const canvasStored = getCanvasHiddenTabIds();
+  const rawHostStored = normalizeHiddenIds(host?.hiddenTabIds);
+  const unhideHostIds = opts?.unhideHostTabs ? new Set(rawHostStored) : null;
+  const hostStored = unhideHostIds ? [] : rawHostStored;
+  const canvasStored = unhideHostIds ? getCanvasHiddenTabIds().filter((id) => !unhideHostIds.has(id)) : getCanvasHiddenTabIds();
   const stored = mergeHiddenTabIdLists(hostStored, canvasStored);
   const liveIds = collectLiveTabIdsForHiddenHeal();
   const forCanvas = healHiddenTabIds(stored, liveIds, { keepUnmatched: true });
@@ -9363,7 +9405,7 @@ var init_live_tab_order = __esm(() => {
   _titleResolvedLogged = new Set;
 });
 
-// ../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
+// node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
 function u3(e, t, n, o, i, u) {
   t || (t = {});
   var a, c, p = t;
@@ -9380,6 +9422,178 @@ var f3 = 0;
 var init_jsxRuntime_module = __esm(() => {
   init_preact_module();
   init_preact_module();
+});
+
+// src/tabs/unhide-vanilla.ts
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function waitForPaint() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame !== "function") {
+      setTimeout(resolve, 0);
+      return;
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+async function ensureVanillaTabsUnhiddenBeforeConfigure() {
+  await _ensureBeforeConfigure?.();
+}
+function startUnhideVanillaTabs() {
+  if (_activeStop)
+    return _activeStop;
+  const generation = currentLifecycleGeneration();
+  let stopped = false;
+  let timer = null;
+  let apiWrite = null;
+  let apiWritePromise = null;
+  let modelUnhideInFlight = false;
+  const pendingModelUnhideIds = new Set;
+  const reconcileOwnedHiddenTabs = async () => {
+    if (stopped || !isLifecycleCurrent(generation) || modelUnhideInFlight || pendingModelUnhideIds.size === 0)
+      return;
+    modelUnhideInFlight = true;
+    try {
+      await Promise.resolve().then(() => init_dispatch());
+      if (stopped || !isLifecycleCurrent(generation))
+        return;
+      const host = getHost();
+      const model = getModel();
+      if (!host || !model)
+        return;
+      const intents = [];
+      const resolvedIds = [];
+      for (const id of pendingModelUnhideIds) {
+        const key = host.findKey(id);
+        if (!key)
+          continue;
+        if (!model.hidden.includes(key)) {
+          pendingModelUnhideIds.delete(id);
+          continue;
+        }
+        intents.push({ t: "setHidden", key, hidden: false });
+        resolvedIds.push(id);
+      }
+      if (intents.length === 0)
+        return;
+      await dispatchBatch(intents);
+      for (const id of resolvedIds)
+        pendingModelUnhideIds.delete(id);
+    } catch (err) {
+      dlog("[tabs] clearing host-originated model hides failed", String(err));
+    } finally {
+      modelUnhideInFlight = false;
+    }
+  };
+  const check = () => {
+    if (stopped || !isLifecycleCurrent(generation))
+      return;
+    let hostSettings;
+    try {
+      hostSettings = refreshHostDrawerSettings();
+    } catch (err) {
+      dlog("[tabs] refresh host settings for unhide failed", String(err));
+      return;
+    }
+    const hostHidden = normalizeHiddenIds(hostSettings?.hiddenTabIds);
+    for (const id of hostHidden)
+      pendingModelUnhideIds.add(id);
+    if (hostHidden.length > 0) {
+      try {
+        syncHiddenTabsFromHost({ unhideHostTabs: true });
+      } catch (err) {
+        dlog("[tabs] sync hidden tabs during unhide failed", String(err));
+      }
+      try {
+        if (isHostDrawerSettingsWritable() && patchHostDrawerSettings({ hiddenTabIds: [] })) {
+          dlog("[tabs] cleared Lumiverse hidden-tab list via store");
+          reconcileOwnedHiddenTabs();
+          return;
+        }
+      } catch (err) {
+        dlog("[tabs] clearing Lumiverse hidden-tab list via store failed", String(err));
+      }
+      if (!apiWrite) {
+        const controller = new AbortController;
+        apiWrite = controller;
+        const request = writeHostDrawerSettingsViaApi({ hiddenTabIds: [] }, controller.signal);
+        apiWritePromise = request;
+        request.then((ok) => {
+          if (ok && !stopped && isLifecycleCurrent(generation)) {
+            dlog("[tabs] cleared Lumiverse hidden-tab list via settings API");
+          }
+        }).finally(() => {
+          if (apiWrite === controller) {
+            apiWrite = null;
+            if (apiWritePromise === request)
+              apiWritePromise = null;
+          }
+        });
+      }
+    }
+    reconcileOwnedHiddenTabs();
+  };
+  const ensureBeforeConfigure = async () => {
+    if (stopped || !isLifecycleCurrent(generation))
+      return;
+    const deadline = Date.now() + CONFIGURE_READY_TIMEOUT_MS;
+    while (!stopped && isLifecycleCurrent(generation)) {
+      check();
+      let latest;
+      try {
+        latest = refreshHostDrawerSettings();
+      } catch (err) {
+        dlog("[tabs] refresh host settings before Configure failed", String(err));
+        return;
+      }
+      if (normalizeHiddenIds(latest?.hiddenTabIds).length === 0) {
+        await waitForPaint();
+        return;
+      }
+      if (Date.now() >= deadline)
+        return;
+      if (apiWritePromise) {
+        await Promise.race([apiWritePromise.then(() => {
+          return;
+        }, () => {
+          return;
+        }), wait(100)]);
+      } else {
+        await wait(100);
+      }
+    }
+  };
+  _ensureBeforeConfigure = ensureBeforeConfigure;
+  const stop = () => {
+    if (stopped)
+      return;
+    stopped = true;
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+    apiWrite?.abort();
+    apiWrite = null;
+    apiWritePromise = null;
+    pendingModelUnhideIds.clear();
+    if (_ensureBeforeConfigure === ensureBeforeConfigure) {
+      _ensureBeforeConfigure = null;
+    }
+    if (_activeStop === stop)
+      _activeStop = null;
+  };
+  _activeStop = stop;
+  check();
+  timer = setInterval(check, CHECK_INTERVAL_MS);
+  return stop;
+}
+var CHECK_INTERVAL_MS = 1000, CONFIGURE_READY_TIMEOUT_MS = 3500, _activeStop = null, _ensureBeforeConfigure = null;
+var init_unhide_vanilla = __esm(() => {
+  init_host_settings();
+  init_log();
+  init_canvas_hidden();
+  init_hidden_tabs();
 });
 
 // src/persist/layout-load.ts
@@ -11732,24 +11946,39 @@ function buildLiveDraftAndBase() {
   });
   return { draft, base, catalog };
 }
-function openConfigureTabsModal() {
+async function openConfigureTabsModal() {
   if (typeof document === "undefined")
     return;
-  if (_modalContainer) {
-    _modalContainer.style.display = "flex";
+  if (_openInProgress)
     return;
+  _openInProgress = true;
+  try {
+    if (getSettings().unhideVanillaTabs) {
+      try {
+        await Promise.resolve().then(() => init_unhide_vanilla());
+        await ensureVanillaTabsUnhiddenBeforeConfigure();
+      } catch (err) {
+        dlog("[configure-modal] waiting for Lumiverse tabs before open failed", String(err));
+      }
+    }
+    if (_modalContainer) {
+      _modalContainer.style.display = "flex";
+      return;
+    }
+    injectModalStyles();
+    document.body.style.overflow = "hidden";
+    const { draft, base, catalog } = buildLiveDraftAndBase();
+    _draftRef = draft;
+    _baseSnapshotRef = base;
+    _baseEpoch++;
+    dlog("[configure-modal] open (draft built from live)");
+    _modalContainer = document.createElement("div");
+    _modalContainer.id = "canvas-configure-tabs-modal";
+    document.body.appendChild(_modalContainer);
+    renderModal(draft, catalog, null, false);
+  } finally {
+    _openInProgress = false;
   }
-  injectModalStyles();
-  document.body.style.overflow = "hidden";
-  const { draft, base, catalog } = buildLiveDraftAndBase();
-  _draftRef = draft;
-  _baseSnapshotRef = base;
-  _baseEpoch++;
-  dlog("[configure-modal] open (draft built from live)");
-  _modalContainer = document.createElement("div");
-  _modalContainer.id = "canvas-configure-tabs-modal";
-  document.body.appendChild(_modalContainer);
-  renderModal(draft, catalog, null, false);
 }
 function refreshConfigureDraftFromLive() {
   if (!_modalContainer)
@@ -11863,7 +12092,7 @@ function unmountModal() {
   clearDragState();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _openInProgress = false, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS = 140, SETTLE_MIN_DISTANCE_PX = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_preact_module();
   init_hooks_module();
@@ -22460,6 +22689,19 @@ var init_drawer_tab_position = __esm(() => {
 });
 
 // src/features/registry.ts
+function mountUnhideVanillaTabs() {
+  if (_unhideVanillaTabsTeardown)
+    return _unhideVanillaTabsTeardown;
+  const stop = startUnhideVanillaTabs();
+  const teardown = () => {
+    stop();
+    if (_unhideVanillaTabsTeardown === teardown) {
+      _unhideVanillaTabsTeardown = null;
+    }
+  };
+  _unhideVanillaTabsTeardown = teardown;
+  return teardown;
+}
 function makeLayoutFacetFeature(id) {
   return {
     id,
@@ -22539,7 +22781,7 @@ var SHADOW_DISABLE_DESKTOP_ID = "sidebar-ux-shadow-disable-desktop", SHADOW_DISA
       box-shadow: none !important;
     }
   }
-`, debugFeature, _chatReflowTeardown = null, chatReflowFeature, welcomeReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, coreTabsHiddenFeature, optionsButtonLocationFeature, startButtonLocationFeature, startButtonAlwaysOnScreenEdgeFeature, startButtonAtStripTopFeature, osWindowControlsFeature, FEATURES;
+`, _unhideVanillaTabsTeardown = null, unhideVanillaTabsFeature, debugFeature, _chatReflowTeardown = null, chatReflowFeature, welcomeReflowFeature, secondSidebarFeature, resizeSidebarsFeature, drawerSyncFeature, shadowsDesktopFeature, shadowsMobileFeature, persistDrawerOpenStateFeature, persistDrawerWidthFeature, _slashImpl, slashFeature, drawerLocationFeature, horizontalSplitFeature, tabPositionFeature, taskbarModeFeature, hideDrawerOpenCloseButtonsFeature, dragAndDropDrawerTabsFeature, osModeFeature, coreTabsHiddenFeature, optionsButtonLocationFeature, startButtonLocationFeature, startButtonAlwaysOnScreenEdgeFeature, startButtonAtStripTopFeature, osWindowControlsFeature, FEATURES;
 var init_registry = __esm(() => {
   init_state();
   init_tab_list_dnd();
@@ -22566,7 +22808,23 @@ var init_registry = __esm(() => {
   init_main_mirror_drawer();
   init_dispatch();
   init_core_tabs();
+  init_unhide_vanilla();
   init_drawer_tab_position();
+  unhideVanillaTabsFeature = {
+    id: "unhideVanillaTabs",
+    mount() {
+      return mountUnhideVanillaTabs();
+    },
+    apply(_prev, next) {
+      if (next.unhideVanillaTabs) {
+        if (!_unhideVanillaTabsTeardown) {
+          registerCleanup(mountUnhideVanillaTabs());
+        }
+        return;
+      }
+      _unhideVanillaTabsTeardown?.();
+    }
+  };
   debugFeature = {
     id: "debugMode",
     apply(prev, next) {
@@ -22944,6 +23202,7 @@ var init_registry = __esm(() => {
     }
   };
   FEATURES = [
+    unhideVanillaTabsFeature,
     debugFeature,
     chatReflowFeature,
     welcomeReflowFeature,
@@ -24179,6 +24438,12 @@ function buildSettingsPanelDOM() {
     hint: SLASH_HINT,
     control: slash.btn
   }));
+  const unhideVanillaTabs = makeToggle(() => getSettings().unhideVanillaTabs, (v) => setSettings({ unhideVanillaTabs: v }));
+  appendRow(misc.group, buildSettingRow({
+    label: "Keep all Lumiverse tabs available",
+    hint: UNHIDE_VANILLA_TABS_HINT,
+    control: unhideVanillaTabs.btn
+  }));
   const debugMode = makeToggle(() => getSettings().debugMode, (v) => setSettings({ debugMode: v }));
   appendRow(misc.group, buildSettingRow({
     label: "Debug mode",
@@ -24199,6 +24464,7 @@ function buildSettingsPanelDOM() {
     persistOpen.refresh();
     persistWidth.refresh();
     slash.refresh();
+    unhideVanillaTabs.refresh();
     debugMode.refresh();
     shadowsDesktop.refresh();
     shadowsMobile.refresh();
@@ -24332,7 +24598,7 @@ function applySettings(prev, next) {
     }
   }
 }
-var selectModeSeq = 0, MODE_TILES_HINT = "Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.", DRAWER_LAYOUT_HINT = "Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.", DRAWER_MODE_OS_MOBILE_HINT = "On phone-width screens, OS mode uses only the main drawer. Turn OS mode off first if you want to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position.", MIRROR_COMPACT_LOCK_HINT = "Only available in Dual mode. Switch Drawer mode to Dual to turn this on.", MOVE_CONTROLS_HINT = "Moves the tab strip from the drawer panel out to the screen edge, so tabs stay visible even while the drawer is closed. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on, because its window controls need the pinned strips. Turn OS mode off to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear button. Left and Right mean that side of the screen; if no drawer is open there, the gear stays on the main drawer instead. Both puts a gear in each drawer.", START_LOCATION_HINT = "Which drawer shows the Start button. The Start menu still lists every tab from both drawers, wherever the button lives.", START_LOCATION_LOCK_HINT = "Only used in OS mode. Turn OS mode on to choose where the Start button appears.", START_EDGE_HINT = "Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.", START_EDGE_INERT_HINT = "Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.", START_STRIP_TOP_HINT = "Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.", START_STRIP_TOP_INERT_HINT = 'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).', HIDE_BUTTONS_HINT = "Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Has no effect in the Top/Bottom layout: the full-width strip has no open/close handles, so they are always hidden there.", OS_WINDOW_CONTROLS_HINT = "On: every window header shows a minimize (–) and a close (X) button. Off: a single X button that minimizes, matching standard Lumiverse behavior. Either way you can close a window from its tab button’s right-click menu (long-press on touch).", OS_WINDOW_CONTROLS_LOCK_HINT = "Only used in OS mode. Turn OS mode on to change this.", CORE_TABS_HIDDEN_HINT = "Lets you hide built-in tabs (Profile, Reasoning, Loom, and so on) from Configure Tabs. OS mode turns it on automatically, because closing a built-in tab there only hides it — bring it back any time from the Start menu.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "OS mode requires this on. Turn OS mode off to change it.", SHADOWS_DESKTOP_HINT = "Draws a soft shadow along the inner edge of open drawers on desktop-sized screens (wider than 600px), so they stand out from the page behind them.", SHADOWS_MOBILE_HINT = "Draws a soft shadow along the inner edge of open drawers on phone-sized screens (600px or narrower), so they stand out from the page behind them.", CHAT_REFLOW_HINT = "Nudges the chat column over by the width of any open drawer, so the conversation stays centered and no drawer covers it.", WELCOME_REFLOW_HINT = "Nudges the landing page over by the width of any open drawer, so your recent chats stay centered and no drawer covers them.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu. Commands added by other extensions appear there too.", PERSIST_OPEN_HINT = "Remembers which drawers were open and which tab each one showed after a reload, so your layout comes back the way you left it.", PERSIST_WIDTH_HINT = "Remembers the width you dragged each drawer to after a reload, so panel sizes come back the way you left them.", DRAG_DROP_HINT = "Drag a tab button to reorder it or move it to the other drawer. Mouse: press and drag after a short move. Touch: press and hold, then drag. Available on desktop-sized screens (wider than 600px); on phones, use Configure Tabs instead.", RESIZE_PANELS_HINT = "Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.", DEBUG_HINT = "Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
+var selectModeSeq = 0, MODE_TILES_HINT = "Choose how much drawer UI Canvas adds. Vanilla keeps the stock Lumiverse drawers. Taskbar pins the tab strips to the screen edge, so tabs stay reachable even while the drawers are closed. OS mode gives every drawer a Start menu that lists every tab, plus minimize/close window controls.", DRAWER_LAYOUT_HINT = "Which screen edge the drawer tab strips sit on. Sides keeps a strip on each side of the screen, next to its drawer. Top or Bottom moves them into a single full-width strip along that edge and turns Taskbar mode on automatically.", MAIN_SIDE_HINT = "Which side of the screen the main drawer opens from. It stays in sync with Lumiverse's own Display → Drawer side setting and with Configure Tabs → Swap drawer locations, so all three always agree.", MAIN_SIDE_SWAP_HINT = "Swapping drawer sides…", DRAWER_MODE_HINT = "Single shows one drawer, on one side of the screen. Dual adds a second drawer on the opposite side, with its own separate tabs. Each mode keeps its own saved layout, so switching back and forth restores what you had.", DRAWER_MODE_OS_MOBILE_HINT = "On phone-width screens, OS mode uses only the main drawer. Turn OS mode off first if you want to use the second drawer.", MIRROR_COMPACT_HINT = "Matches the second drawer's open/close handle to the main drawer's size and vertical position, so the two line up. When off, the second drawer keeps its own handle size and position.", MIRROR_COMPACT_LOCK_HINT = "Only available in Dual mode. Switch Drawer mode to Dual to turn this on.", MOVE_CONTROLS_HINT = "Moves the tab strip from the drawer panel out to the screen edge, so tabs stay visible even while the drawer is closed. Taskbar mode and Top/Bottom layouts switch this on automatically.", LOCATION_LOCK_HINT = "Locked while Drawer layout is Top or Bottom: the full-width strip already sits on the screen edge, so there is nothing to move.", OS_MODE_TASKBAR_LOCK_HINT = "Locked while OS mode is on, because its window controls need the pinned strips. Turn OS mode off to change this.", OPTIONS_LOCATION_HINT = "Which drawer shows the Settings gear button. Left and Right mean that side of the screen; if no drawer is open there, the gear stays on the main drawer instead. Both puts a gear in each drawer.", START_LOCATION_HINT = "Which drawer shows the Start button. The Start menu still lists every tab from both drawers, wherever the button lives.", START_LOCATION_LOCK_HINT = "Only used in OS mode. Turn OS mode on to choose where the Start button appears.", START_EDGE_HINT = "Top/Bottom layout only: keeps the Start button at the outer end of the strip, right on the screen edge. When off, Start sits next to the tab buttons instead.", START_EDGE_INERT_HINT = "Only applies to the Top/Bottom layout — the side strips have no outer end to anchor to.", START_STRIP_TOP_HINT = "Sides layout only: lifts the Start button to the top of the vertical tab strip, above the tabs. The Settings gear button stays at the bottom. When off, Start sits in the bottom dock.", START_STRIP_TOP_INERT_HINT = 'Only applies to the Sides layout — the full-width strip has no separate top slot (use "Start button always on screen edge" there).', HIDE_BUTTONS_HINT = "Hides the small handle that opens and closes the drawer. Only available in Taskbar mode.", HIDE_BUTTONS_INERT_HINT = "Has no effect in the Top/Bottom layout: the full-width strip has no open/close handles, so they are always hidden there.", OS_WINDOW_CONTROLS_HINT = "On: every window header shows a minimize (–) and a close (X) button. Off: a single X button that minimizes, matching standard Lumiverse behavior. Either way you can close a window from its tab button’s right-click menu (long-press on touch).", OS_WINDOW_CONTROLS_LOCK_HINT = "Only used in OS mode. Turn OS mode on to change this.", CORE_TABS_HIDDEN_HINT = "Lets you hide built-in tabs (Profile, Reasoning, Loom, and so on) from Configure Tabs. OS mode turns it on automatically, because closing a built-in tab there only hides it — bring it back any time from the Start menu.", CORE_TABS_HIDDEN_OS_LOCK_HINT = "OS mode requires this on. Turn OS mode off to change it.", SHADOWS_DESKTOP_HINT = "Draws a soft shadow along the inner edge of open drawers on desktop-sized screens (wider than 600px), so they stand out from the page behind them.", SHADOWS_MOBILE_HINT = "Draws a soft shadow along the inner edge of open drawers on phone-sized screens (600px or narrower), so they stand out from the page behind them.", CHAT_REFLOW_HINT = "Nudges the chat column over by the width of any open drawer, so the conversation stays centered and no drawer covers it.", WELCOME_REFLOW_HINT = "Nudges the landing page over by the width of any open drawer, so your recent chats stay centered and no drawer covers them.", SLASH_HINT = "When on, typing / in the chat input opens the slash-command menu. Commands added by other extensions appear there too.", PERSIST_OPEN_HINT = "Remembers which drawers were open and which tab each one showed after a reload, so your layout comes back the way you left it.", PERSIST_WIDTH_HINT = "Remembers the width you dragged each drawer to after a reload, so panel sizes come back the way you left them.", DRAG_DROP_HINT = "Drag a tab button to reorder it or move it to the other drawer. Mouse: press and drag after a short move. Touch: press and hold, then drag. Available on desktop-sized screens (wider than 600px); on phones, use Configure Tabs instead.", RESIZE_PANELS_HINT = "Adds a thin grab bar to the inner edge of each drawer. Drag it to make the drawer wider or narrower.", DEBUG_HINT = "Writes [Canvas] messages to the browser console and enables window.__canvasDebug() for inspecting Canvas internals. Useful when reporting a bug — otherwise leave it off.", UNHIDE_VANILLA_TABS_HINT = "Keeps Lumiverse's hidden-tab list empty so Canvas can access every panel. Panels hidden in both places are unhidden in Canvas too; other Canvas-only Configure Tabs hides stay. Turning this off stops automatic un-hiding but does not re-hide panels already shown.", _settingsPanelCtx = null, _storeMod = null, _dispatchMod = null, PANEL_STYLE_ID = "sidebar-ux-panel-styles", MODE_TILE_DEFS;
 var init_panel = __esm(() => {
   init_state();
   init_log();
@@ -25112,9 +25378,7 @@ function startConfigureTabsIntercept() {
     e.stopImmediatePropagation();
     dismissHostContextMenu();
     dlog("[configure-intercept] intercepted Configure Tabs click, opening modal");
-    Promise.resolve().then(() => (init_configure_modal(), {})).then((m) => {
-      openConfigureTabsModal();
-    }).catch((err) => {
+    Promise.resolve().then(() => (init_configure_modal(), {})).then((m) => openConfigureTabsModal()).catch((err) => {
       dwarn("[configure-intercept] Failed to open configure modal:", err);
     });
   };
@@ -26203,7 +26467,9 @@ function setup(ctx) {
     drawerObserver.onTabRegistered(() => {
       tagMainSidebarButtons();
       Promise.resolve().then(() => (init_hidden_tabs(), {})).then((m) => {
-        scheduleSyncHiddenTabsFromHost();
+        scheduleSyncHiddenTabsFromHost({
+          unhideHostTabs: getSettings().unhideVanillaTabs
+        });
       }).catch(() => {});
       Promise.resolve().then(() => (init_configure_modal(), {})).then((m) => {
         refreshConfigureDraftFromLive();

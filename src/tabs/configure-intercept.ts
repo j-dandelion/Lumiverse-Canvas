@@ -111,11 +111,11 @@ export function startConfigureTabsIntercept(): void {
 
     // Open our configure modal.
     // Lazy-import to avoid circular dependency at module load time.
-    void import('./configure-modal').then((m) => {
-      m.openConfigureTabsModal()
-    }).catch((err) => {
-      dwarn('[configure-intercept] Failed to open configure modal:', err)
-    })
+    void import('./configure-modal')
+      .then((m) => m.openConfigureTabsModal())
+      .catch((err) => {
+        dwarn('[configure-intercept] Failed to open configure modal:', err)
+      })
   }
 
   // Use capture phase so we fire before React's event system.

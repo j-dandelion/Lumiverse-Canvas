@@ -112,6 +112,7 @@ export function cancelScheduledHiddenTabsSync(): void {
  */
 export function scheduleSyncHiddenTabsFromHost(opts?: {
   delayMs?: number
+  unhideHostTabs?: boolean
 }): void {
   const delayMs = opts?.delayMs ?? 50
   if (_debouncedSyncTimer !== null) clearTimeout(_debouncedSyncTimer)
@@ -122,7 +123,7 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
     _debouncedSyncTimer = null
     if (!isLifecycleCurrent(armedGeneration)) return
     try {
-      syncHiddenTabsFromHost()
+      syncHiddenTabsFromHost({ unhideHostTabs: opts?.unhideHostTabs })
     } catch {
       // best-effort
     }
@@ -136,7 +137,10 @@ export function scheduleSyncHiddenTabsFromHost(opts?: {
  *
  * Safe to call repeatedly (on finishRestore, tab register, setup).
  */
-export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
+export function syncHiddenTabsFromHost(opts?: {
+  /** Ignore vanilla hidden ids and remove those ids from Canvas's copy too. */
+  unhideHostTabs?: boolean
+}): SyncHiddenTabsResult {
   // LUMI-21: no hidden-sync work once the instance is torn down. The
   // disable chain's restoreHostContent() re-registers host tabs, which
   // drives this sync against the freshly restored vanilla strip — without
@@ -145,8 +149,12 @@ export function syncHiddenTabsFromHost(): SyncHiddenTabsResult {
   // is unaffected.
   if (!isInstanceActive()) return { hiddenIds: getCanvasHiddenTabIds() }
   const host = getHostDrawerSettings()
-  const hostStored = normalizeHiddenIds(host?.hiddenTabIds)
-  const canvasStored = getCanvasHiddenTabIds()
+  const rawHostStored = normalizeHiddenIds(host?.hiddenTabIds)
+  const unhideHostIds = opts?.unhideHostTabs ? new Set(rawHostStored) : null
+  const hostStored = unhideHostIds ? [] : rawHostStored
+  const canvasStored = unhideHostIds
+    ? getCanvasHiddenTabIds().filter((id) => !unhideHostIds.has(id))
+    : getCanvasHiddenTabIds()
   const stored = mergeHiddenTabIdLists(hostStored, canvasStored)
 
   const liveIds = collectLiveTabIdsForHiddenHeal()

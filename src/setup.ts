@@ -401,7 +401,9 @@ export function setup(ctx: SpindleFrontendContext) {
       // write-back — the model owns hidden. Debounced: many tabs register
       // in a burst at boot.
       void import('./tabs/hidden-tabs').then((m) => {
-        m.scheduleSyncHiddenTabsFromHost()
+        m.scheduleSyncHiddenTabsFromHost({
+          unhideHostTabs: getSettings().unhideVanillaTabs,
+        })
       }).catch(() => { /* ignore */ })
       // When a new tab button appears (late extension registration), refresh
       // the open Configure Tabs modal so the user sees the new tab immediately

@@ -262,6 +262,12 @@ export interface CanvasSettings {
    *  Written by the drag handler; cleared on extension disable. */
   secondaryDrawerTabOverrideVh?: number
 
+  // --- Lumiverse integration ---
+  /** Keep Lumiverse's host hidden-tab list empty while enabled, so Canvas can
+   *  discover and access every Lumiverse panel. A panel hidden in both places
+   *  is also unhidden from Canvas's own hidden set. */
+  unhideVanillaTabs?: boolean
+
   // --- Debug ---
   /** Master debug switch — enables [Canvas] console output AND installs
    *  `window.__canvasDebug()` for in-browser fiber tree inspection. */
@@ -309,6 +315,8 @@ export const DEFAULT_CANVAS_SETTINGS: Required<CanvasSettings> = {
   drawerTabDrag: true,
   mainDrawerTabOverrideVh: undefined as unknown as number,
   secondaryDrawerTabOverrideVh: undefined as unknown as number,
+  // Lumiverse integration
+  unhideVanillaTabs: false,
   // Debug
   debugMode: false,
 }

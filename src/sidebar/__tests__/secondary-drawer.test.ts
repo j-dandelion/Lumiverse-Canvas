@@ -275,6 +275,7 @@ function setupTest(opts: {
     button: fakeButton,
     extensionId: 'unknown',
     title: tabTitle,
+    key: `builtin:${tabId}`,
   })
 
   return { fakeRoot, fakePanelContent, fakeWrapper, tabId, tabTitle }
@@ -301,6 +302,7 @@ function setupExtTest(opts: {
   // --- Fake root (the extension's primary DOM root that gets reparented) ---
   const fakeRoot: any = {
     tagName: 'DIV',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     setAttribute(name: string, value: string) { fakeRoot._attrs[name] = value },
     getAttribute(name: string) { return fakeRoot._attrs[name] ?? null },
@@ -399,6 +401,7 @@ function setupExtTest(opts: {
     getAttribute(name: string) { return fakePanelContent._attrs[name] ?? null },
     setAttribute(name: string, value: string) { fakePanelContent._attrs[name] = value },
     removeAttribute(name: string) { delete fakePanelContent._attrs[name] },
+    contains(node: any) { return fakePanelContent.children.includes(node) },
   }
   const fakeHeaderTitle = {
     tagName: 'SPAN',
@@ -461,6 +464,7 @@ function setupExtTest(opts: {
   // --- Fake sidebar with a button matching the tab title (for findMainTabButton) ---
   const fakeMainButton: any = {
     tagName: 'BUTTON',
+    isConnected: true,
     _attrs: {} as Record<string, string>,
     style: { display: '' },
     getAttribute(name: string) { return fakeMainButton._attrs[name] ?? null },
@@ -1050,13 +1054,20 @@ async function testNoRootWiresButton() {
     const { assignToSecondary } = await import('../secondary-drawer')
     await assignToSecondary(env.tabId)
 
+    // LUMI-50: a rootless lazy extension is mounted through its real main
+    // button. With no host to mount it, placement FAILS and rolls back — no
+    // secondary button, no reparent, and the main host button stays visible.
+    await new Promise((resolve) => setTimeout(resolve, 20))
     const tabButtons = (env.fakeTabList as any).children
-    assert(tabButtons.length > 0, 'T-NO-ROOT: secondary button created without a content root')
-    const btn = tabButtons[tabButtons.length - 1]
-    assertEqual(btn.getAttribute('data-tab-id'), env.tabId, 'T-NO-ROOT: button id is the composite')
-    assertEqual(env.fakeMainButton.style.display, 'none', 'T-NO-ROOT: main host button hidden (not moved)')
+    assertEqual(tabButtons.length, 0, 'T-NO-ROOT: no secondary button without a mounted root')
+    assertEqual(env.fakeMainButton.style.display, '', 'T-NO-ROOT: main host button stays visible (rollback)')
     const moved = env.fakePanelContent.children.filter((c: any) => c.getAttribute?.('data-canvas-moved'))
     assertEqual(moved.length, 0, 'T-NO-ROOT: NO root reparented into the secondary content')
+    assertEqual(
+      getTabAssignments().has(env.tabId),
+      false,
+      'T-NO-ROOT: rolled-back placement clears the assignment (no owned model)',
+    )
   } finally { restoreTest() }
 }
 

@@ -180,6 +180,13 @@ export function getHostDrawerSettings(): HostDrawerSettings | null {
   return _cachedDrawerSettings
 }
 
+/** Force a fresh fiber walk before reading host settings that may have been
+ * changed by Lumiverse's own Configure Tabs UI. */
+export function refreshHostDrawerSettings(): HostDrawerSettings | null {
+  findHostSettings(true)
+  return _cachedDrawerSettings
+}
+
 /**
  * Write a partial update to host drawer settings.
  * Returns true if the write was applied. Returns false if the bridge is
@@ -290,32 +297,39 @@ export function __setSettingsApiFetchForTest(fn: SettingsApiFetch | null): void 
  */
 export async function writeHostDrawerSettingsViaApi(
   patch: Partial<HostDrawerSettings>,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  const controller = new AbortController()
+  const abortFromCaller = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener('abort', abortFromCaller, { once: true })
+  const timeout = setTimeout(() => controller.abort(), 3000)
   try {
     const doFetch = _settingsApiFetch ?? ((url: string, init?: RequestInit) => fetch(url, init))
-    // Bound the request: this path is a fire-and-forget fallback and must
-    // never leave background work hanging (e.g. a non-responsive dev host).
-    const signal = typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
-      ? AbortSignal.timeout(3000)
-      : undefined
-    const initBase: RequestInit = signal ? { signal } : {}
+    // Bound the request and let the owning feature cancel it when switched
+    // off or torn down.
+    const initBase: RequestInit = { signal: controller.signal }
     // GET the current row first (404 when never written — fine).
     let current: HostDrawerSettings = {}
-    try {
-      const res = await doFetch('/api/v1/settings/drawerSettings', {
-        ...initBase,
-        method: 'GET',
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      })
-      if (res.ok) {
-        const row = (await res.json()) as { value?: unknown } | null
-        if (row && typeof row.value === 'object' && row.value !== null) {
-          current = row.value as HostDrawerSettings
-        }
+    const getRes = await doFetch('/api/v1/settings/drawerSettings', {
+      ...initBase,
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    })
+    if (getRes.status !== 404) {
+      if (!getRes.ok) {
+        dlog('writeHostDrawerSettingsViaApi: read rejected', { status: getRes.status })
+        return false
       }
-    } catch {
-      /* row may not exist yet — start from {} */
+      try {
+        const row = (await getRes.json()) as { value?: unknown } | null
+        if (!row || typeof row.value !== 'object' || row.value === null) return false
+        current = row.value as HostDrawerSettings
+      } catch {
+        dlog('writeHostDrawerSettingsViaApi: unreadable settings row')
+        return false
+      }
     }
     const merged = { ...current, ...patch }
     const res = await doFetch('/api/v1/settings/drawerSettings', {
@@ -334,6 +348,9 @@ export async function writeHostDrawerSettingsViaApi(
   } catch (err) {
     dlog('writeHostDrawerSettingsViaApi: failed', String(err))
     return false
+  } finally {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abortFromCaller)
   }
 }
 

@@ -53,6 +53,7 @@ import { dlog, dwarn } from '../debug/log'
 // (A machine-based configure-modal draft was explored and retired — see git history.)
 
 let _modalContainer: HTMLElement | null = null
+let _openInProgress = false
 let _draftRef: ConfigureDraft | null = null
 let _baseSnapshotRef: BaseSnapshot | null = null
 /**
@@ -1701,30 +1702,45 @@ function buildLiveDraftAndBase(): {
  * Open the Configure Tabs modal.
  * Builds the initial draft from current host state and renders the Preact component.
  */
-export function openConfigureTabsModal(): void {
+export async function openConfigureTabsModal(): Promise<void> {
   if (typeof document === 'undefined') return
-  if (_modalContainer) {
-    _modalContainer.style.display = 'flex'
-    return
+  if (_openInProgress) return
+  _openInProgress = true
+  try {
+    if (getSettings().unhideVanillaTabs) {
+      try {
+        const { ensureVanillaTabsUnhiddenBeforeConfigure } = await import('./unhide-vanilla')
+        await ensureVanillaTabsUnhiddenBeforeConfigure()
+      } catch (err) {
+        dlog('[configure-modal] waiting for Lumiverse tabs before open failed', String(err))
+      }
+    }
+
+    if (_modalContainer) {
+      _modalContainer.style.display = 'flex'
+      return
+    }
+
+    injectModalStyles()
+
+    // Lock body scroll like host ModalShell
+    document.body.style.overflow = 'hidden'
+
+    const { draft, base, catalog } = buildLiveDraftAndBase()
+    _draftRef = draft
+    _baseSnapshotRef = base
+    _baseEpoch++
+    dlog('[configure-modal] open (draft built from live)')
+
+    // Create container and render.
+    _modalContainer = document.createElement('div')
+    _modalContainer.id = 'canvas-configure-tabs-modal'
+    document.body.appendChild(_modalContainer)
+
+    renderModal(draft, catalog, null, false)
+  } finally {
+    _openInProgress = false
   }
-
-  injectModalStyles()
-
-  // Lock body scroll like host ModalShell
-  document.body.style.overflow = 'hidden'
-
-  const { draft, base, catalog } = buildLiveDraftAndBase()
-  _draftRef = draft
-  _baseSnapshotRef = base
-  _baseEpoch++
-  dlog('[configure-modal] open (draft built from live)')
-
-  // Create container and render.
-  _modalContainer = document.createElement('div')
-  _modalContainer.id = 'canvas-configure-tabs-modal'
-  document.body.appendChild(_modalContainer)
-
-  renderModal(draft, catalog, null, false)
 }
 
 /**

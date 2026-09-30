@@ -43,6 +43,12 @@ import type { LayoutModel, TabKey, Side } from '../../core/model'
   },
 }
 
+// CSS.escape is used by the placement path's root-present check; Bun has no
+// global CSS. A conservative escape is fine — test ids are simple.
+;(globalThis as any).CSS = {
+  escape: (s: string) => s.replace(/[^a-zA-Z0-9_\u00A0-\uFFFF-]/g, (c) => `\\${c}`),
+}
+
 // ── Mock state + recording spies ──
 let _mobile = false
 let _secondaryOpen = false
@@ -53,7 +59,15 @@ mock.module('../../sidebar/secondary', () => ({
   openSecondarySidebar: () => { calls.push('openSecondarySidebar') },
   closeSecondarySidebar: () => { calls.push('closeSecondarySidebar') },
   liveIdForFacadeKey: (k: string) => k,
-  getSecondaryWrapper: () => null,
+  // The placement mock represents a successful extension-root move:
+  // production resolves the panel content off the wrapper, then looks for the
+  // moved root inside it (dispatch.ts placementFirstMoveByLiveId §1).
+  getSecondaryWrapper: () => ({
+    querySelector: (selector: string) =>
+      selector.includes('sidebar-ux-panel-content')
+        ? { querySelector: (inner: string) => (inner.includes('data-canvas-moved') ? {} : null) }
+        : null,
+  }),
   getSecondaryTabList: () => null,
   getSecondaryDrawer: () => null,
   getSecondaryPanel: () => null,
