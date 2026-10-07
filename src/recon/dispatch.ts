@@ -7,7 +7,7 @@ import type { HostPort, LiveTabId, ReconcileReport } from '../host/port'
 import { reconcile } from './reconcile'
 import { serializeModelToLayout, buildModelFromLayout, type LegacyLayout } from '../persist/layout-model'
 import { saveLayoutToDisk } from '../persist/layout-repo'
-import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, isOsModeEnabled, getSettings, getLastLoadedLayout } from '../settings/state'
+import { getSingleLayoutSlot, getDualLayoutSlot, getOsSingleLayoutSlot, getOsDualLayoutSlot, setDualLayoutSlot, setOsDualLayoutSlot, isOsModeEnabled, getSettings, getLastLoadedLayout } from '../settings/state'
 import { dlog, dwarn } from '../debug/log'
 
 let _host: HostPort | null = null
@@ -540,6 +540,106 @@ function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string
   }
 }
 
+/**
+ * Apply explicit cross-drawer moves to the durable profile. During a partial
+ * boot restore, normal model writes are gated to protect unresolved tabs.
+ * Patch the full pending blob in that case so the user's move is still saved
+ * without dropping tabs that have not registered yet. Outside a pending
+ * restore, refresh the dual profile when a move empties the drawer; this
+ * prevents boot recovery from resurrecting its previous contents.
+ */
+function refreshDualProfileAfterExplicitMove(
+  before: LayoutModel,
+  after: LayoutModel,
+  intents: readonly Intent[],
+  resolve: (key: TabKey) => string | null,
+): PersistedLayout | null {
+  if (!getSettings().secondSidebarEnabled) return null
+  const movedTargets = new Map<TabKey, Side>()
+  for (const intent of intents) {
+    if (intent.t !== 'move') continue
+    const from = sideOfKey(before, intent.key)
+    const to = sideOfKey(after, intent.key)
+    if (from && to && from !== to && to === intent.to) movedTargets.set(intent.key, to)
+  }
+  if (movedTargets.size === 0) return null
+
+  const movedIds = new Set([...movedTargets.keys()].map(resolve).filter((id): id is string => id !== null))
+  if (movedIds.size === 0) return null
+
+  const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled()
+  if (_pendingLayout !== null && typeof _pendingLayout === 'object') {
+    const patchLayout = (source: LegacyLayout): LegacyLayout => {
+      const primary = { ...source.primary }
+      const secondary = { ...source.secondary }
+      const activePrimaryId = after.active.primary ? resolve(after.active.primary) : null
+      if (activePrimaryId) primary.tabId = activePrimaryId
+      else if (primary.tabId && movedIds.has(primary.tabId)) delete primary.tabId
+      const activeSecondaryId = after.active.secondary ? resolve(after.active.secondary) : null
+      if (activeSecondaryId) secondary.activeTabId = activeSecondaryId
+      else if (secondary.activeTabId && movedIds.has(secondary.activeTabId)) delete secondary.activeTabId
+      const serializedAfter = serializeModelToLayout(after, resolve, _version)
+      const detachedTabs = (source.detachedTabs ?? []).filter((tab) => !movedIds.has(tab.tabId))
+      for (const [key, target] of movedTargets) {
+        if (target !== 'secondary') continue
+        const id = resolve(key)
+        if (!id || detachedTabs.some((tab) => tab.tabId === id)) continue
+        const serializedTab = serializedAfter.detachedTabs?.find((tab) => tab.tabId === id)
+        detachedTabs.push(serializedTab ?? { tabId: id, tabTitle: key, sidebar: 'secondary' })
+      }
+      return {
+        ...source,
+        primary,
+        secondary,
+        detachedTabs,
+      }
+    }
+
+    const pending = _pendingLayout as PersistedLayout
+    const next: PersistedLayout = patchLayout(pending)
+    if (os) {
+      const profile = patchLayout(getOsDualLayoutSlot() ?? pending.osDualLayout ?? pending)
+      next.osDualLayout = profile
+      setOsDualLayoutSlot(profile)
+    } else {
+      const profile = patchLayout(getDualLayoutSlot() ?? pending.dualLayout ?? pending)
+      next.dualLayout = profile
+      setDualLayoutSlot(profile)
+    }
+    _pendingLayout = next
+    return next
+  }
+
+  const movedFinalTabToPrimary = [...movedTargets].some(([key, target]) =>
+    target === 'primary' && before.secondary.includes(key) && after.secondary.length === 0,
+  )
+  if (!movedFinalTabToPrimary) return null
+
+  const layout = serializeModelToLayout(after, resolve, _version)
+  const profile: LegacyLayout = os
+    ? layout
+    : { ...layout, closedTabIds: [], menuHiddenTabIds: [] }
+  if (os) setOsDualLayoutSlot(profile)
+  else setDualLayoutSlot(profile)
+  return null
+}
+
+async function persistPendingUserMove(layout: PersistedLayout): Promise<void> {
+  const json = JSON.stringify(layout)
+  if (json === _lastPersistedLayout) return
+  _lastPersistedLayout = json
+  try {
+    const result = await saveLayoutToDisk(layout)
+    if (result.status === 'error') {
+      if (_lastPersistedLayout === json) _lastPersistedLayout = null
+      console.warn('[canvas] saveLayoutToDisk failed:', result.reason)
+    }
+  } catch (err) {
+    if (_lastPersistedLayout === json) _lastPersistedLayout = null
+    console.warn('[canvas] saveLayoutToDisk rejected:', err)
+  }
+}
+
 function persistModel(model: LayoutModel): void {
   const host = _host
   if (!host) return
@@ -638,8 +738,10 @@ export function dispatch(intent: Intent): Promise<void> {
       return
     }
 
+    const pendingLayout = refreshDualProfileAfterExplicitMove(_model, next, [intent], (key) => host.resolve(key))
     commitModel(next)
     commitModel(await reconcileAndPersist(next, gen))
+    if (pendingLayout && gen === _generation && _host === host) await persistPendingUserMove(pendingLayout)
   })
   // Keep the shared queue usable after a failed host operation while preserving
   // the rejection for the caller that initiated this dispatch.
@@ -666,8 +768,10 @@ export function dispatchBatch(intents: readonly Intent[]): Promise<void> {
     })
     if (next === _model) return
 
+    const pendingLayout = refreshDualProfileAfterExplicitMove(_model, next, intents, (key) => host.resolve(key))
     commitModel(next)
     commitModel(await reconcileAndPersist(next, gen))
+    if (pendingLayout && gen === _generation && _host === host) await persistPendingUserMove(pendingLayout)
   })
   _queue = task.catch(() => {})
 

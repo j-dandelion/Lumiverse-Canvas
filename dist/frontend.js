@@ -246,7 +246,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "2.0.1";
+var _backendCtx = null, CANVAS_VERSION = "";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -3942,7 +3942,7 @@ var init_host_settings = __esm(() => {
   init_store();
 });
 
-// ../../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/dist/preact.module.js
+// node_modules/preact/dist/preact.module.js
 function m(n, l) {
   for (var u in l)
     n[u] = l[u];
@@ -4244,7 +4244,7 @@ var init_preact_module = __esm(() => {
   }, H.__r = 0, f = Math.random().toString(8), c = "__d" + f, a = "__a" + f, s = /(PointerCapture)$|Capture$/i, h = 0, p = V(false), v = V(true), y = 0;
 });
 
-// ../../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/hooks/dist/hooks.module.js
+// node_modules/preact/hooks/dist/hooks.module.js
 function p2(n, t) {
   c2.__h && c2.__h(r2, n, o2 || t), o2 = 0;
   var u = r2.__H || (r2.__H = { __: [], __h: [] });
@@ -9173,7 +9173,7 @@ var init_live_tab_order = __esm(() => {
   _titleResolvedLogged = new Set;
 });
 
-// ../../../../../canvas_ext/node_modules/.pnpm/preact@10.29.2/node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
+// node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
 function u3(e, t, n, o, i, u) {
   t || (t = {});
   var a, c, p = t;
@@ -16399,6 +16399,99 @@ function buildPersistedBlob(model, resolve) {
     osSingleLayout: isDual ? getOsSingleLayoutSlot() : os ? base : getOsSingleLayoutSlot()
   };
 }
+function refreshDualProfileAfterExplicitMove(before, after, intents, resolve) {
+  if (!getSettings().secondSidebarEnabled)
+    return null;
+  const movedTargets = new Map;
+  for (const intent of intents) {
+    if (intent.t !== "move")
+      continue;
+    const from = sideOfKey(before, intent.key);
+    const to = sideOfKey(after, intent.key);
+    if (from && to && from !== to && to === intent.to)
+      movedTargets.set(intent.key, to);
+  }
+  if (movedTargets.size === 0)
+    return null;
+  const movedIds = new Set([...movedTargets.keys()].map(resolve).filter((id) => id !== null));
+  if (movedIds.size === 0)
+    return null;
+  const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled();
+  if (_pendingLayout !== null && typeof _pendingLayout === "object") {
+    const patchLayout = (source) => {
+      const primary = { ...source.primary };
+      const secondary = { ...source.secondary };
+      const activePrimaryId = after.active.primary ? resolve(after.active.primary) : null;
+      if (activePrimaryId)
+        primary.tabId = activePrimaryId;
+      else if (primary.tabId && movedIds.has(primary.tabId))
+        delete primary.tabId;
+      const activeSecondaryId = after.active.secondary ? resolve(after.active.secondary) : null;
+      if (activeSecondaryId)
+        secondary.activeTabId = activeSecondaryId;
+      else if (secondary.activeTabId && movedIds.has(secondary.activeTabId))
+        delete secondary.activeTabId;
+      const serializedAfter = serializeModelToLayout(after, resolve, _version);
+      const detachedTabs = (source.detachedTabs ?? []).filter((tab) => !movedIds.has(tab.tabId));
+      for (const [key, target] of movedTargets) {
+        if (target !== "secondary")
+          continue;
+        const id = resolve(key);
+        if (!id || detachedTabs.some((tab) => tab.tabId === id))
+          continue;
+        const serializedTab = serializedAfter.detachedTabs?.find((tab) => tab.tabId === id);
+        detachedTabs.push(serializedTab ?? { tabId: id, tabTitle: key, sidebar: "secondary" });
+      }
+      return {
+        ...source,
+        primary,
+        secondary,
+        detachedTabs
+      };
+    };
+    const pending = _pendingLayout;
+    const next = patchLayout(pending);
+    if (os) {
+      const profile = patchLayout(getOsDualLayoutSlot() ?? pending.osDualLayout ?? pending);
+      next.osDualLayout = profile;
+      setOsDualLayoutSlot(profile);
+    } else {
+      const profile = patchLayout(getDualLayoutSlot() ?? pending.dualLayout ?? pending);
+      next.dualLayout = profile;
+      setDualLayoutSlot(profile);
+    }
+    _pendingLayout = next;
+    return next;
+  }
+  const movedFinalTabToPrimary = [...movedTargets].some(([key, target]) => target === "primary" && before.secondary.includes(key) && after.secondary.length === 0);
+  if (!movedFinalTabToPrimary)
+    return null;
+  const layout = serializeModelToLayout(after, resolve, _version);
+  const profile = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [] };
+  if (os)
+    setOsDualLayoutSlot(profile);
+  else
+    setDualLayoutSlot(profile);
+  return null;
+}
+async function persistPendingUserMove(layout) {
+  const json = JSON.stringify(layout);
+  if (json === _lastPersistedLayout)
+    return;
+  _lastPersistedLayout = json;
+  try {
+    const result = await saveLayoutToDisk(layout);
+    if (result.status === "error") {
+      if (_lastPersistedLayout === json)
+        _lastPersistedLayout = null;
+      console.warn("[canvas] saveLayoutToDisk failed:", result.reason);
+    }
+  } catch (err) {
+    if (_lastPersistedLayout === json)
+      _lastPersistedLayout = null;
+    console.warn("[canvas] saveLayoutToDisk rejected:", err);
+  }
+}
 function persistModel(model) {
   const host = _host;
   if (!host)
@@ -16468,8 +16561,11 @@ function dispatch(intent) {
       dlog("[dispatch] no-op (reduce returned same model)", { t: intent.t });
       return;
     }
+    const pendingLayout = refreshDualProfileAfterExplicitMove(_model, next, [intent], (key) => host.resolve(key));
     commitModel(next);
     commitModel(await reconcileAndPersist(next, gen));
+    if (pendingLayout && gen === _generation2 && _host === host)
+      await persistPendingUserMove(pendingLayout);
   });
   _queue = task.catch(() => {});
   return task;
@@ -16494,8 +16590,11 @@ function dispatchBatch(intents) {
     });
     if (next === _model)
       return;
+    const pendingLayout = refreshDualProfileAfterExplicitMove(_model, next, intents, (key) => host.resolve(key));
     commitModel(next);
     commitModel(await reconcileAndPersist(next, gen));
+    if (pendingLayout && gen === _generation2 && _host === host)
+      await persistPendingUserMove(pendingLayout);
   });
   _queue = task.catch(() => {});
   return task;

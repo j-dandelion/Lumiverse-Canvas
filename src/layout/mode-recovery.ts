@@ -10,21 +10,12 @@
 // so setup performs exactly ONE main-drawer restore on the boot path
 // (decision/apply split, plan R2-4).
 //
-// ── ACCEPTED TRADE-OFF (plan R2-1) — read before changing the preconditions ──
-// An INTENTIONALLY-EMPTIED dual layout (the user moved the last secondary tab
-// to the primary drawer, then reloaded) is INDISTINGUISHABLE from a mid-switch
-// reload: both present as setting=dual + single-shaped top-level + non-empty
-// dual slot. Recovery resurrects the saved dual layout in both cases — i.e.
-// after intentionally emptying the second drawer and reloading, the tabs come
-// back in the second drawer. This is LOCKED BY TEST C-3
-// (`src/layout/__tests__/mode-recovery.test.ts`) and is deliberately NOT
-// justified by the H4 guard: H4 is a different scope (it protects the stored
-// slot from being overwritten at DISABLE time by a single-shaped live model);
-// this is a boot-time product decision about which layout to show. Do not
-// cite H4 as its rationale. Plan considered fix-at-source (persist the dual
-// top-level before the settings flip) and rejected it for this round — the
-// unload settings flush makes the window unavoidable without reordering the
-// enable's mount/restore contract.
+// An explicit move of the final secondary tab to the primary drawer updates
+// the active dual profile in recon/dispatch before persistence. That prevents
+// ordinary user moves from leaving an older profile that boot recovery could
+// mistake for an interrupted transition. Recovery still accepts a stale
+// non-empty dual profile for interrupted transitions and legacy layouts saved
+// before that update existed (test C-3).
 //
 // Import graph stays lean on purpose: settings/state, recon/dispatch,
 // layout/mode-profiles, persist/layout-model, debug/log, and dom/clamp (a

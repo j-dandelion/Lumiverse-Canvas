@@ -7,10 +7,9 @@
 //        facet-derived opts AND the real restore lands the dual model.
 //   C-2  dual top-level (detachedTabs present) → plan returns null (a
 //        late-re-resolving dual boot must never enter recovery, R2-2).
-//   C-3  intentional-empty fixture → plan returns the slot — LOCKS the
-//        accepted trade-off (R2-1): intentional-empty ≡ mid-switch reload at
-//        boot, recovery resurrects the saved dual layout. Do not "fix" this
-//        assertion; see mode-recovery.ts header.
+//   C-3  single-shaped top-level + stale non-empty dual slot → recovery still
+//        returns the slot for interrupted switches and legacy layouts saved
+//        before explicit final-tab moves began refreshing that slot.
 //   C-4  facets off → opts forwarded false (+ geometry gated off).
 //   C-5  nulls: setting single, OS+mobile, empty/unresolvable slot, no model.
 //   C-6  secondary geometry: width var written + openSecondarySidebar called
@@ -184,8 +183,9 @@ const dualTop: any = {
   ...anomalyTop,
   detachedTabs: [{ tabId: 'loom', tabTitle: 'Loom', sidebar: 'secondary' }],
 }
-// C-3 fixture: intentional-empty dual — tabOrder content, no detachedTabs.
-const intentionalEmptyTop: any = {
+// C-3 fixture: single-shaped top-level paired with a stale dual slot, matching
+// an interrupted transition or a legacy save from before the dispatch fix.
+const singleShapedTop: any = {
   version: 't',
   primary: { open: false, width: 420, tabId: 'profile' },
   secondary: { open: false, width: 420, activeTabId: undefined },
@@ -223,12 +223,11 @@ assertEqual(planModeRecovery(anomalyTop), dualSlot, 'C-1: plan returns the dual 
 // ══ C-2: dual top-level → plan null (late-resolving dual never recovers) ══
 assertEqual(planModeRecovery(dualTop), null, 'C-2: dual-shaped top-level → plan null')
 
-// ══ C-3: intentional-empty fixture → plan returns the slot (ACCEPTED
-//        TRADE-OFF, R2-1 — locked here; see mode-recovery.ts header) ══
+// ══ C-3: stale dual profile remains recoverable for interrupted/legacy state ══
 assertEqual(
-  planModeRecovery(intentionalEmptyTop),
+  planModeRecovery(singleShapedTop),
   dualSlot,
-  'C-3: intentional-empty dual still plans recovery (accepted trade-off locked)',
+  'C-3: stale dual profile still plans recovery for interrupted/legacy state',
 )
 
 // ══ C-5: null cases (model stays single throughout this block) ══

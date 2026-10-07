@@ -8,9 +8,10 @@ import { serializeModelToLayout, buildModelFromLayout } from '../../persist/layo
 import {
   armLayoutRepo,
   __resetLayoutRepoForTest,
+  __resolveLayoutSave,
   setLayoutRepoBackendCtx,
 } from '../../persist/layout-repo'
-import { hydrateSettings, setLastLoadedLayout } from '../../settings/state'
+import { hydrateSettings, setLastLoadedLayout, getDualLayoutSlot, setDualLayoutSlot } from '../../settings/state'
 
 let passed = 0
 let failed = 0
@@ -652,6 +653,137 @@ async function testDispatchPersistsModel() {
   __resetLayoutRepoForTest()
 }
 
+// D14 regression — moving the final secondary tab into the main drawer must
+// update the active dual profile as well as the top-level live layout. The
+// dual profile is the boot-recovery source when settings still say dual.
+async function testLastSecondaryMovePersistsEmptyDualProfile() {
+  async function exercise(useBatch: boolean, label: string) {
+    const host = new FakeHost([
+      makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+      makeLiveTab(B, 'h:b', 'secondary', { activeInSecondary: true }),
+    ])
+    const model: LayoutModel = {
+      ...createEmptyModel(),
+      primary: [PROFILE],
+      secondary: [B],
+      active: { primary: PROFILE, secondary: B },
+    }
+    const writes: any[] = []
+    const backend = {
+      sendToBackend(message: { type: string; [key: string]: unknown }) {
+        if (message.type === 'SAVE_LAYOUT') writes.push(message.layout)
+      },
+      onBackendMessage() { return () => {} },
+    }
+
+    __resetLayoutRepoForTest()
+    setLayoutRepoBackendCtx(backend)
+    armLayoutRepo()
+    shutdown()
+    hydrateSettings({ secondSidebarEnabled: true, osMode: false })
+    setDualLayoutSlot(serializeModelToLayout(model, (key) => host.resolve(key), 'test-v1.0'))
+    bootstrap(model, host, 'test-v1.0')
+    await flush()
+    writes.length = 0
+
+    const move: Intent = { t: 'move', key: B, to: 'primary', index: 1, activateDest: true }
+    if (useBatch) await dispatchBatch([move])
+    else await dispatch(move)
+    await flush()
+
+    const activeProfile = getDualLayoutSlot()
+    assertEqual(activeProfile?.detachedTabs?.length, 0, `${label}a: active dual profile records no secondary tabs`)
+    assert(activeProfile?.tabOrder?.includes('h:b'), `${label}b: active dual profile keeps the moved tab in order`)
+    const saved = writes[writes.length - 1]
+    assertEqual(saved?.dualLayout?.detachedTabs?.length, 0, `${label}c: saved dual profile has no detached tabs`)
+    assert(saved?.dualLayout?.tabOrder?.includes('h:b'), `${label}d: saved dual profile retains the moved tab`)
+
+    const reloaded = buildModelFromLayout(saved.dualLayout, (id) => host.findKey(id), 'left')
+    assert(reloaded.primary.includes(B), `${label}e: profile reload restores the tab to main drawer`)
+    assertEqual(reloaded.secondary.length, 0, `${label}f: profile reload keeps second drawer empty`)
+
+    shutdown()
+    hydrateSettings(null)
+    setDualLayoutSlot(null)
+    __resetLayoutRepoForTest()
+  }
+
+  await exercise(false, 'D14e: direct move ')
+  await exercise(true, 'D14f: batch move ')
+}
+
+// The boot retry window intentionally blocks partial model writes. An
+// explicit move must patch and save the full pending blob so late tabs remain
+// present while the moved tab's new placement survives an immediate reload.
+async function testLastSecondaryMovePersistsDuringPendingBoot() {
+  const host = new FakeHost([
+    makeLiveTab(PROFILE, 'h:profile', 'primary', { activeInPrimary: true }),
+    makeLiveTab(B, 'h:b', 'secondary', { activeInSecondary: true }),
+  ])
+  const dualProfile: any = {
+    version: 'test-v1.0',
+    primary: { open: true, width: 420, tabId: 'h:profile' },
+    secondary: { open: true, width: 390, activeTabId: 'h:b' },
+    detachedTabs: [
+      { tabId: 'h:b', tabTitle: 'B', sidebar: 'secondary' },
+      { tabId: 'late-tab', tabTitle: 'Late tab', sidebar: 'secondary' },
+    ],
+    tabOrder: ['h:profile', 'h:b', 'late-tab'],
+    hiddenTabIds: [],
+    drawerSide: 'left',
+  }
+  const layout = { ...dualProfile, dualLayout: dualProfile, singleLayout: null }
+  const writes: any[] = []
+  const backend = {
+    sendToBackend(message: { type: string; [key: string]: unknown }) {
+      if (message.type === 'SAVE_LAYOUT') {
+        writes.push(message.layout)
+        __resolveLayoutSave(message.saveId as number, { status: 'ok', data: undefined })
+      }
+    },
+    onBackendMessage() { return () => {} },
+  }
+
+  __resetLayoutRepoForTest()
+  setLayoutRepoBackendCtx(backend)
+  armLayoutRepo()
+  shutdown()
+  hydrateSettings({ secondSidebarEnabled: true, osMode: false })
+  setDualLayoutSlot(dualProfile)
+  bootstrapFromLayout(layout, host, 'test-v1.0')
+  await flush()
+  writes.length = 0
+
+  await dispatch({ t: 'move', key: B, to: 'primary', index: 1, activateDest: true })
+  await flush()
+
+  const saved = writes[writes.length - 1]
+  assert(saved != null, 'D14g-a: explicit move writes while boot restore is pending')
+  assert(saved?.detachedTabs?.some((tab: any) => tab.tabId === 'late-tab'),
+    'D14g-b: pending save preserves unresolved secondary tab')
+  assert(!saved?.detachedTabs?.some((tab: any) => tab.tabId === 'h:b'),
+    'D14g-c: pending save removes moved tab from top-level secondary placement')
+  assert(saved?.dualLayout?.detachedTabs?.some((tab: any) => tab.tabId === 'late-tab'),
+    'D14g-d: active dual profile retains unresolved secondary tab')
+  assert(!saved?.dualLayout?.detachedTabs?.some((tab: any) => tab.tabId === 'h:b'),
+    'D14g-e: active dual profile records moved tab in main drawer')
+
+  const reloaded = buildModelFromLayout(saved.dualLayout, (id) => host.findKey(id), 'left')
+  assert(reloaded.primary.includes(B), 'D14g-f: pending profile reload keeps moved tab in main drawer')
+  assertEqual(reloaded.secondary.length, 0, 'D14g-g: unresolved tab does not block the moved tab reload')
+
+  const lateKey = extensionKey('ext', 'late')
+  host.addTab(lateKey, 'late-tab', 'secondary')
+  await flush()
+  assert(getModel()?.primary.includes(B), 'D14g-h: late merge keeps the user move in main drawer')
+  assert(getModel()?.secondary.includes(lateKey), 'D14g-i: late merge still restores unresolved tab to secondary')
+
+  shutdown()
+  hydrateSettings(null)
+  setDualLayoutSlot(null)
+  __resetLayoutRepoForTest()
+}
+
 // ==========================================================================
 // D15 — unknown live ids do not mutate the owned model
 // ==========================================================================
@@ -1111,6 +1243,8 @@ await testMoveWhenTabNotInModel()
 await testMoveWhenTabIsInModel()
 await testMoveWithExplicitVisibleIndex()
 await testDispatchPersistsModel()
+await testLastSecondaryMovePersistsEmptyDualProfile()
+await testLastSecondaryMovePersistsDuringPendingBoot()
 await testPersistFacetFreeze()
 await testUnknownLiveIdIsNoOp()
 await testDispatchActivateByLiveId()
