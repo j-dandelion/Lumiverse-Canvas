@@ -16,6 +16,8 @@ Documentation for the Canvas extension codebase, optimized for coding agents. St
 10. **[resize-and-drag.md](resize-and-drag.md)** — Resize handles and drawer tab drag: handle structure, drag behavior, drawer tab vertical positioning
 11. **[mobile.md](mobile.md)** — Mobile support: viewport detection, mutual exclusion, CSS variable sync, viewport crossing, mobile-specific behaviors
 
+12. **[compatibility.md](compatibility.md)** — Canvas branch targets, paired previews, task branch bases, and promotion rules
+
 **[pitfalls.md](pitfalls.md)** — Cross-cutting traps: TabKey vs liveId dual-keying, mirror active-key rules, placement-first flow, boot restore placement, drawer-location/motion traps, host NO-GOs. **Read this before touching tab moves, the main-mirror, restore, or drawer motion.**
 
 ## Quick Reference

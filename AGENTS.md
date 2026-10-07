@@ -82,4 +82,8 @@ Unregister: `window.dispatchEvent(new CustomEvent('canvas:slash-unregister', { d
 
 ## Commit discipline
 
-Commit only when the user asks or approves. Never commit work-state journals (`WORKFLOW.md`, `REFACTOR-PLAN.md`, `.release-notes-*.md` — gitignored on purpose) or scratch files under `references/`.
+Canvas belongs to the user and has two host-compatibility tracks: Canvas `main` for Lumiverse `main`, and Canvas `staging` for Lumiverse `staging`. For a task, base `agent/<short-task-name>-main` on Canvas `main` or `agent/<short-task-name>-staging` on Canvas `staging`, according to the intended Lumiverse target. Test against the matching Lumiverse branch; do not assume cross-pair compatibility.
+
+Commit only when the user asks or approves. The workspace authorizes agents to push completed work to task branches; do not open, draft, or submit a Canvas pull request. A task-branch push does not authorize updating either compatibility branch or releasing to users. The owner must explicitly accept and authorize promotion to Canvas `main` or `staging`. When a shared fix is needed on both tracks, port or cherry-pick it to a task branch based on the other track and validate both matching pairs. Do not merge all upstream Lumiverse `staging` into `main` as part of routine Canvas work.
+
+Never commit work-state journals (`WORKFLOW.md`, `REFACTOR-PLAN.md`, `.release-notes-*.md` — gitignored on purpose) or scratch files under `references/`.

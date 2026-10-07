@@ -19,6 +19,13 @@ Convenient tweaks and shortcuts to enhance your Lumiverse UI! More at your finge
 - **Hide drawer open/close buttons** setting: They're a bit redundant in taskbar mode, so you have the option to hide them
 - **Slash commands**: `/select-all`, `/select 10-40`, `/newchat`, `/persona`, more coming soon. Suggestion and autocomplete system. Focused on performance
 
+## Lumiverse branch compatibility
+
+- Canvas `main` is intended for Lumiverse `main`.
+- Canvas `staging` is intended for Lumiverse `staging`.
+
+Choose the matching Canvas branch when installing or switching Canvas in Lumiverse's Spindle panel. If installation is left on **Default**, Spindle uses the Canvas repository's default branch (`main`). Lumiverse staging users should select Canvas `staging` explicitly. See the [compatibility guide](docs/compatibility.md) for agent workflow and testing rules.
+
 ## Coming soon™
 - Change size of tabs easily
 - Advanced theme options, like controls for custom sizing/layout of chat message elements and a bunch of other CSS variables
