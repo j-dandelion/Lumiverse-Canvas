@@ -200,8 +200,8 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
     hidden: keepUser ? current.hidden : hidden,
     menuHidden: keepUser ? current.menuHidden : menuHidden,
     active: {
-      primary: current.active.primary ?? rebuilt.active.primary,
-      secondary: current.active.secondary ?? rebuilt.active.secondary,
+      primary: current.folderBrowser?.primary ? null : current.active.primary ?? rebuilt.active.primary,
+      secondary: current.folderBrowser?.secondary ? null : current.active.secondary ?? rebuilt.active.secondary,
     },
     drawers: keepUser ? current.drawers : rebuilt.drawers,
     side: keepUser ? current.side : rebuilt.side,
@@ -235,7 +235,7 @@ function mergeResolvedInto(current: LayoutModel, rebuilt: LayoutModel): LayoutMo
 function markPendingWindowUserIntent(intent: Intent): void {
   if (_pendingLayout === null) return
   const t = intent.t
-  if (t === 'setDrawer' || t === 'swapSides' || t === 'setHidden' || t === 'setMenuHidden') {
+  if (t === 'setDrawer' || t === 'swapSides' || t === 'setHidden' || t === 'setMenuHidden' || t === 'setOrganization' || t === 'browseFolder') {
     _pendingWindowUserState = true
   }
 }
@@ -512,7 +512,7 @@ function buildPersistedBlob(model: LayoutModel, resolve: (key: TabKey) => string
   // session — the OS slots keep their stored copies, symmetric with closed.
   const base: LegacyLayout = os
     ? layout
-    : { ...layout, closedTabIds: [], menuHiddenTabIds: [] }
+    : { ...layout, closedTabIds: [], menuHiddenTabIds: [], closeHidden: [], ...(layout.leafState ? { leafState: { ...layout.leafState, closed: [], menuHidden: [] } } : {}) }
   // Facet freeze — mirrors `layout/snapshot.ts` buildPersistedLayout: a
   // disabled persistDrawerOpenState / persistDrawerWidth facet keeps the
   // LAST-LOADED main-drawer open/width on disk instead of the latest live
@@ -618,7 +618,7 @@ function refreshDualProfileAfterExplicitMove(
   const layout = serializeModelToLayout(after, resolve, _version)
   const profile: LegacyLayout = os
     ? layout
-    : { ...layout, closedTabIds: [], menuHiddenTabIds: [] }
+    : { ...layout, closedTabIds: [], menuHiddenTabIds: [], closeHidden: [], ...(layout.leafState ? { leafState: { ...layout.leafState, closed: [], menuHidden: [] } } : {}) }
   if (os) setOsDualLayoutSlot(profile)
   else setDualLayoutSlot(profile)
   return null
@@ -1046,7 +1046,10 @@ export async function applyMainMirrorMoveChrome(
   const btn = findMainTabButton(id) as HTMLElement | null
   if (btn && btn.isConnected) {
     dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`)
-    try { btn.click() } catch { /* host may throw during teardown */ }
+    try {
+      if (btn.getAttribute('aria-hidden') === 'true') { const { navigateHostTab } = await import('../tabs/host-navigation'); navigateHostTab(id, btn) }
+      else btn.click()
+    } catch { /* host may throw during teardown */ }
   } else {
     dlog('[tabmove] apply chrome: re-assert button not found in main sidebar', { id })
   }

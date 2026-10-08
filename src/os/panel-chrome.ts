@@ -148,7 +148,7 @@ function whenPanelParkingReady(side: 'primary' | 'secondary', apply: () => void)
  */
 function applyNoActiveParking(side: 'primary' | 'secondary'): void {
   if (!_active || !isOsModeEnabled()) return
-  if (getDisplayedLiveId(side)) return
+  if (getDisplayedLiveId(side) || getModel()?.folderBrowser?.[side]) return
   if (side === 'primary') setCanvasMainNoActive(true)
   const surface = resolveHeaderSurface(side)
   if (!surface) return
@@ -174,6 +174,14 @@ function ensureChromeForSide(side: 'primary' | 'secondary'): void {
   ensureHeaderObserved(surface.header)
 
   const displayed = getDisplayedLiveId(side)
+  const browsing = !!getModel()?.folderBrowser?.[side]
+  if (browsing) {
+    if (side === 'primary') setCanvasMainNoActive(false)
+    setHeaderHidden(surface.closeBtn, false)
+    const min = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`) as HTMLButtonElement | null
+    if (min) setHeaderHidden(min, true)
+    return
+  }
   // D17 parking: no displayed window → no header title, no stale parked
   // content and no header controls (the drawer can still be manually reopened
   // via the edge toggle, D16). Primary hides its content slot through the
@@ -335,6 +343,7 @@ export function mountPanelChrome(): void {
   // MINIMIZES (vanilla drawer behavior — the strip button stays), and the
   // window can still be closed from the tab button's context menu.
   setPanelHeaderCloseHandler((side) => {
+    if (getModel()?.folderBrowser?.[side]) return false
     if (!isOsModeEnabled()) return false
     const liveId = getDisplayedLiveId(side)
     if (!liveId) return false

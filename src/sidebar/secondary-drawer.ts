@@ -510,7 +510,7 @@ async function mountExtensionRootFromMain(
     if (!before.open) {
       const toggle = findMainDrawerToggle()
       if (toggle) toggle.click()
-      else targetButton.click()
+      else { const { navigateHostTab } = await import('../tabs/host-navigation'); navigateHostTab(resolvedId, targetButton) }
       await nextFrame()
     }
     const afterOpen = readHostMainDrawerState()
@@ -532,7 +532,8 @@ async function mountExtensionRootFromMain(
           handoffId,
           wasTargetHidden,
         }))
-        handoffButton.click()
+        const { navigateHostTab } = await import('../tabs/host-navigation')
+        navigateHostTab(handoffId, handoffButton)
         await nextFrame()
       } else {
         dwarn('[SecondaryDrawer] rootless selected extension has no main-tab handoff', {
@@ -553,7 +554,8 @@ async function mountExtensionRootFromMain(
       }))
       if (liveTargetButton) {
         if (liveTargetButton.style.display === 'none') liveTargetButton.style.display = ''
-        liveTargetButton.click()
+        const { navigateHostTab } = await import('../tabs/host-navigation')
+        navigateHostTab(resolvedId, liveTargetButton)
       }
     }
     dlog('[SecondaryDrawer] host state after selecting extension', JSON.stringify(readHostMainDrawerState()))

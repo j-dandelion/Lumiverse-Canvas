@@ -15,6 +15,7 @@ import { activeAfterRemoval, sideOfKey, visibleKeys } from '../core/select'
 import { isExtensionKey, type TabKey, type Side, type ObservedWorld, type LayoutModel } from '../core/model'
 import type { LiveTabId } from '../host/port'
 import { dlog, dwarn } from '../debug/log'
+import { currentLifecycleGeneration, isLifecycleCurrent } from '../lifecycle/instance'
 import { isModeSwitchBarrierActive } from '../settings/mode-transition'
 
 export type OwnedCommitResult =
@@ -98,6 +99,7 @@ export async function commitDraftToOwnedModel(
   if (isModeSwitchBarrierActive()) {
     return { ok: false, error: 'mode-switch-in-progress', superseded: true }
   }
+  const generation = currentLifecycleGeneration()
   const host = getHost()
   if (!host) return { ok: false, error: 'Canvas tab model is not ready.' }
 
@@ -192,7 +194,8 @@ export async function commitDraftToOwnedModel(
     }
 
     for (const key of [...model.primary, ...model.secondary]) {
-      intents.push({ t: 'setHidden', key, hidden: hidden.has(key) })
+      if (draft.organization && !host.findKey(host.resolve(key) ?? '')) continue
+      intents.push({ t: 'setHidden', key, hidden: hidden.has(key), ...(model.closeHidden?.includes(key) && model.hidden.includes(key) === hidden.has(key) ? { origin: 'close' as const } : {}) })
     }
 
     // OS closed-window coherence: un-hiding a tab in Configure that is in the
@@ -202,6 +205,7 @@ export async function commitDraftToOwnedModel(
     // emits setHidden for EVERY key on every save, so keying the drop on
     // "key is closed" alone would un-close every OS window on any Apply.
     for (const key of model.closed) {
+      if (draft.organization && !host.findKey(host.resolve(key) ?? '')) continue
       if (model.hidden.includes(key) && !hidden.has(key)) {
         intents.push({ t: 'setClosed', key, closed: false })
       }
@@ -213,7 +217,7 @@ export async function commitDraftToOwnedModel(
     // resulting selection explicit rather than allowing the host snapshot to
     // choose a default tab.
     if (commitBaseModel) {
-      const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase)
+      const activeBeforeRebase = activeAtGestureStart ?? (draft.organization ? commitBaseModel.active : activeSelection(observedBeforeRebase))
       for (const source of ['primary', 'secondary'] as const) {
         const active = activeBeforeRebase[source]
         if (!active || hidden.has(active)) continue
@@ -319,6 +323,47 @@ export async function commitDraftToOwnedModel(
       }
     }
 
+    // Folder transactions place all live members before publishing ownership.
+    // Missing extensions stay as saved members; a failed live placement rolls
+    // already placed members back and never commits a successful-looking group.
+    if (draft.organization && plannedMoves.length && typeof document !== 'undefined') {
+      const drawer = await import('../sidebar/secondary-drawer')
+      const { getSecondaryWrapper } = await import('../sidebar/secondary')
+      const { cssEscape } = await import('./buttons')
+      const placed: typeof plannedMoves = []
+      drawer.setSuppressAutoActivation(true)
+      try {
+        for (const move of plannedMoves) {
+          if (!isLifecycleCurrent(generation)) throw new Error('Canvas was disabled during placement.')
+          const id = host.resolve(move.key)
+          if (!id) continue
+          placed.push(move)
+          if (move.to === 'secondary') {
+            await drawer.assignToSecondary(id, { facadeKey: move.key, openOnClosed: false, setActiveWhenReady: false })
+            if (!getSecondaryWrapper()?.querySelector(`[data-canvas-moved="${cssEscape(id)}"]`)) throw new Error(`Could not place ${id} in the second drawer.`)
+          } else {
+            await drawer.unassignFromSecondary(id)
+            if (getSecondaryWrapper()?.querySelector(`[data-canvas-moved="${cssEscape(id)}"]`)) throw new Error(`Could not return ${id} to the main drawer.`)
+          }
+        }
+      } catch (error) {
+        for (const move of placed.reverse()) {
+          if (!isLifecycleCurrent(generation)) break
+          const id = host.resolve(move.key); if (!id) continue
+          try { if (move.to === 'secondary') await drawer.unassignFromSecondary(id); else await drawer.assignToSecondary(id, { facadeKey: move.key, openOnClosed: false, setActiveWhenReady: false }) } catch { /* failure remains surfaced, saved organization is unchanged */ }
+        }
+        if (isLifecycleCurrent(generation)) for (const side of ['primary', 'secondary'] as const) {
+          const key = model.active[side], id = key ? host.resolve(key) : null
+          if (id) { try { await host.activate(side, id) } catch { /* original placement failure is surfaced */ } }
+        }
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      } finally { drawer.setSuppressAutoActivation(false) }
+      if (!isLifecycleCurrent(generation) || isModeSwitchBarrierActive()) return { ok: false, error: 'mode-switch-in-progress', superseded: true }
+    }
+    if (draft.organization) {
+      intents.push({ t: 'setOrganization', organization: draft.organization })
+      for (const move of plannedMoves) if (model.active.primary === move.key || model.active.secondary === move.key) intents.push({ t: 'activate', key: move.key, side: move.to })
+    }
     await dispatchBatch(intents)
     const committed = getModel()
     dlog('[owned-commit] committed', {
@@ -338,7 +383,7 @@ export async function commitDraftToOwnedModel(
     // DOM side for every committed cross-side move. Quiet: never activate
     // the moved tab in the destination (DnD/Configure contract) and never
     // force-open a closed drawer.
-    if (plannedMoves.length > 0 && typeof document !== 'undefined') {
+    if (!draft.organization && plannedMoves.length > 0 && typeof document !== 'undefined') {
       try {
         const drawer = await import('../sidebar/secondary-drawer')
         drawer.setSuppressAutoActivation(true)
@@ -420,7 +465,17 @@ export async function commitDraftToOwnedModel(
     // secondary neighbor handoff for moves-to-primary. Same helpers the
     // right-click and DnD paths use. Skipped with skipChrome — the DnD
     // caller applies its own (pre-hide) captures after the commit.
-    if (!opts?.skipChrome) {
+    if (draft.organization) {
+      if (!isLifecycleCurrent(generation)) return { ok: false, error: 'Canvas was disabled during the edit.', superseded: true }
+      const next = getModel()
+      const { commandDrawerOpen } = await import('../os/drawer-command')
+      if (!isLifecycleCurrent(generation)) return { ok: false, error: 'Canvas was disabled during the edit.', superseded: true }
+      for (const side of ['primary', 'secondary'] as const) {
+        if (next?.folderBrowser?.[side]) { if (next.drawers[side].open) commandDrawerOpen(side, true); continue }
+        const key = next?.active[side], id = key ? host.resolve(key) : null
+        if (id && (plannedMoves.length || model.folderBrowser?.[side])) { await host.activate(side, id); if (!isLifecycleCurrent(generation)) return { ok: false, error: 'Canvas was disabled during the edit.', superseded: true }; if (next?.drawers[side].open) commandDrawerOpen(side, true) }
+      }
+    } else if (!opts?.skipChrome) {
       for (const move of plannedMoves) {
         const liveId = host.resolve(move.key)
         if (!liveId) continue

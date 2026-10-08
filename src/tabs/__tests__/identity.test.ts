@@ -56,6 +56,14 @@ const LOOM: TabShape = {
   titles: new Set(['Loom']),
 }
 
+// Lumiverse staging merges the old OOC and Feedback tabs into Council.
+{
+  const council: TabShape = { id: 'council', extensionId: '', title: 'Council', key: 'builtin:council' }
+  assertEqual(liveIdForKey('builtin:ooc', [council]), 'council', 'legacy OOC key resolves to the live Council entry')
+  assertEqual(keyForLiveId('feedback', [council]), 'builtin:council', 'legacy Feedback address resolves to the frozen Council key')
+  assertEqual(keyForLiveId('feedback', []), null, 'migration never fabricates an unavailable Council key')
+}
+
 // ── liveIdForKey: key → live id ────────────────────────────────────────────
 
 {

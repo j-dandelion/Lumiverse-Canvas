@@ -1,3 +1,5 @@
+import type { Organization } from './organization'
+
 export type TabKey = string
 
 export type Side = 'primary' | 'secondary'
@@ -6,6 +8,13 @@ export type DrawerSide = 'left' | 'right'
 
 export interface LayoutModel {
   readonly version: 2
+  readonly organization?: Organization
+  readonly folderBrowser?: Readonly<Record<Side, string | null>>
+  readonly rememberedLeaf?: Readonly<Record<Side, TabKey | null>>
+  /** Hides produced by OS close, distinct from manual Configure hides. */
+  readonly closeHidden?: readonly TabKey[]
+  readonly nativeOrganizationBaseline?: string
+  readonly nativeAddresses?: Readonly<Record<TabKey, string>>
   readonly primary: readonly TabKey[]
   readonly secondary: readonly TabKey[]
   readonly hidden: readonly TabKey[]

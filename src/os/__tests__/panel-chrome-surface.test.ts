@@ -166,7 +166,7 @@ const tabButtons = read('src/tabs/buttons.ts')
     'one parking body owns title/content/control hiding')
   assertIncludes(panelChrome, 'if (!_active || !isOsModeEnabled()) return',
     'the deferred parking no-ops after teardown / OS-off mid-motion')
-  assertIncludes(panelChrome, 'if (getDisplayedLiveId(side)) return',
+  assertIncludes(panelChrome, 'if (getDisplayedLiveId(side) || getModel()?.folderBrowser?.[side]) return',
     'the deferred parking re-checks the live displayed-window state (reopen race)')
   assert(!panelChrome.includes('setHeaderHidden(surface.closeBtn, !displayed)'),
     'the header controls must NOT hide synchronously — they hide with the parking pass')

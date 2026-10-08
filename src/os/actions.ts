@@ -92,7 +92,7 @@ export function closeWindowByLiveId(liveId: string): Promise<void> {
   if (!wasDisplayed) {
     return dispatchBatch([
       { t: 'setClosed', key, closed: true },
-      ...(hideOnClose ? [{ t: 'setHidden', key, hidden: true } as const] : []),
+      ...(hideOnClose ? [{ t: 'setHidden', key, hidden: true, origin: 'close' } as const] : []),
     ])
   }
   // D17 + D7: closing the displayed window → no active → collapse.
@@ -105,7 +105,7 @@ export function closeWindowByLiveId(liveId: string): Promise<void> {
   const result = dispatchBatch([
     { t: 'setClosed', key, closed: true },
     { t: 'setDrawer', side, open: false },
-    ...(hideOnClose ? [{ t: 'setHidden', key, hidden: true } as const] : []),
+    ...(hideOnClose ? [{ t: 'setHidden', key, hidden: true, origin: 'close' } as const] : []),
   ])
   // The primary shell is the only writer of its open state (the model→host
   // setDrawer write is suppressed — live-verify #1 echo guard); command it
@@ -200,7 +200,7 @@ export function launchEndVisibleIndex(
  * displayed there — the secondary shell's removal/neighbor half is not
  * model-driven. Moves out of the main drawer are model-driven (mirror).
  */
-export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<void> {
+export function openWindowInDrawerByLiveId(liveId: string, side: Side, preservePosition = false): Promise<void> {
   if (!isOsModeEnabled()) return Promise.resolve()
   const host = getHost()
   const model = getModel()
@@ -223,7 +223,7 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   const livesInTarget = side === 'primary' ? model.primary.includes(key) : model.secondary.includes(key)
   // Launch placement: a button already in the TARGET drawer keeps its slot;
   // every other window (other drawer / closed / hidden) lands at the end.
-  const placeAtEnd = !livesInTarget || isClosed || isHidden
+  const placeAtEnd = !livesInTarget || (!preservePosition && (isClosed || isHidden))
   const launchIndex = placeAtEnd
     ? launchEndVisibleIndex(side, model.side, isHorizontalStrip())
     : -1
@@ -255,7 +255,7 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
   const unhide: Promise<void> = isHidden
     ? dispatchBatch([
         { t: 'setHidden', key, hidden: false },
-        ...(livesInTarget
+        ...(livesInTarget && !preservePosition
           ? [{ t: 'reorder', key, side, index: launchIndex } as const]
           : []),
       ])
@@ -299,7 +299,7 @@ export function openWindowInDrawerByLiveId(liveId: string, side: Side): Promise<
       .then(() => dispatchBatch([
         { t: 'setClosed', key, closed: false },
         // LUMI-23: a menu-hidden panel keeps its menuHidden membership.
-        ...(isClosed && !isHidden && livesInTarget
+        ...(isClosed && !isHidden && livesInTarget && !preservePosition
           ? [{ t: 'reorder', key, side, index: launchIndex } as const]
           : []),
         { t: 'activate', key, side },
@@ -376,4 +376,13 @@ export function toggleWindowByLiveId(liveId: string, side: Side): Promise<void> 
   return displayed
     ? minimizeWindowByLiveId(liveId, side)
     : openWindowInDrawerByLiveId(liveId, side)
+}
+
+/** Start and folder tiles focus the existing owner; explicit moves use the
+ * drawer-targeted action. Restoring a closed member never changes its slot. */
+export function openWindowInOwningDrawerByLiveId(liveId: string): Promise<void> {
+  const host = getHost(), model = getModel(), key = host?.findKey(liveId)
+  if (!model || !key) return Promise.resolve()
+  const side = model.secondary.includes(key) ? 'secondary' : 'primary'
+  return openWindowInDrawerByLiveId(liveId, side, true)
 }

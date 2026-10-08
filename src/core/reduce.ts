@@ -1,4 +1,5 @@
 import type { LayoutModel, TabKey, Side, DrawerSide, HostTabEntry, ObservedWorld } from './model'
+import { normalizeOrganization, organizationFor, references, sanitizeOrganization, folderFor, itemId, relocateOrganizationItem } from './organization'
 import type { Intent } from './intents'
 import { listForSide, isHidden, visibleToAbsoluteIndex, activeAfterRemoval, keyExists, sideOfKey } from './select'
 
@@ -438,7 +439,7 @@ function sameKeys(a: readonly string[], b: readonly string[]): boolean {
   return true
 }
 
-export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
+function reduceFlat(model: LayoutModel, intent: Exclude<Intent, { t: 'setOrganization' | 'browseFolder' }>): LayoutModel {
   switch (intent.t) {
     case 'move':
       return applyMove(model, intent.key, intent.to, intent.index, intent.activateDest)
@@ -469,6 +470,85 @@ export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
       return model
     }
   }
+}
+
+/** Choose a nearby surviving root item, excluding the entire moved group. */
+function nearbyOrganizationLeaf(before: LayoutModel, after: LayoutModel, side: Side, removedId: string): TabKey | null {
+  const roots = organizationFor(before)[side]
+  const position = roots.findIndex(item => itemId(item) === removedId || (item.type === 'folder' && item.children.some(ref => ref.key === removedId)))
+  const selectable = (key: TabKey | undefined) => !!key && after[side].includes(key) && !after.hidden.includes(key) && !after.closed.includes(key)
+  const candidates = roots.map((item, index) => ({ item, index })).filter(({ item }) => itemId(item) !== removedId)
+    .sort((a, b) => Math.abs(a.index - position) - Math.abs(b.index - position) || a.index - b.index)
+  for (const { item } of candidates) {
+    const key = (item.type === 'tab' ? [item] : item.type === 'folder' ? item.children : []).find(ref => selectable(ref.key))?.key
+    if (key) return key
+  }
+  return after[side].find(key => selectable(key)) ?? null
+}
+
+export function reduce(model: LayoutModel, intent: Intent): LayoutModel {
+  if (intent.t === 'browseFolder') {
+    if (intent.id && !folderFor(model, intent.side, intent.id)) return model
+    const old = model.folderBrowser ?? { primary: null, secondary: null }
+    if (old[intent.side] === intent.id) return model
+    return { ...model, folderBrowser: { ...old, [intent.side]: intent.id },
+      rememberedLeaf: { ...(model.rememberedLeaf ?? model.active), [intent.side]: model.active[intent.side] ?? model.rememberedLeaf?.[intent.side] ?? null },
+      ...(intent.id ? { active: { ...model.active, [intent.side]: null } } : {}) }
+  }
+  if (intent.t === 'setOrganization') {
+    const organization = sanitizeOrganization(intent.organization)
+    const keys = (side: Side) => references(organization[side]).flatMap(ref => ref.key ? [ref.key] : [])
+    const primary = keys('primary'), secondary = keys('secondary')
+    // Organization does not delete inventory; unknown/new tabs stay reachable.
+    for (const side of ['primary', 'secondary'] as const) for (const key of model[side]) {
+      if (!primary.includes(key) && !secondary.includes(key)) (side === 'primary' ? primary : secondary).push(key)
+    }
+    let next = { ...model, primary, secondary, organization } as LayoutModel
+    next = { ...next, organization: normalizeOrganization(next) }
+    if (model.folderBrowser) {
+      const selected = { ...model.folderBrowser }
+      for (const side of ['primary', 'secondary'] as const) if (selected[side] && !folderFor(next, side, selected[side])) {
+        const deleted = folderFor(model, side, selected[side])
+        const movedSide = side === 'primary' ? 'secondary' : 'primary'
+        if (folderFor(next, movedSide, selected[side])) {
+          selected[movedSide] = selected[side]
+          next = { ...next, active: { ...next.active, [movedSide]: null }, rememberedLeaf: { ...(next.rememberedLeaf ?? next.active), [movedSide]: next.active[movedSide] } }
+          next = { ...next, drawers: { ...next.drawers, [movedSide]: { ...next.drawers[movedSide], open: true } } }
+        }
+        selected[side] = null
+        const leaf = deleted?.children.find(ref => ref.key && next[side].includes(ref.key) && !next.hidden.includes(ref.key) && !next.closed.includes(ref.key))?.key ?? nearbyOrganizationLeaf(model, next, side, `folder:${model.folderBrowser[side]}`)
+        next = { ...next, active: { ...next.active, [side]: leaf } }
+      }
+      next = { ...next, folderBrowser: selected }
+    }
+    for (const side of ['primary', 'secondary'] as const) if (next.active[side] && !next[side].includes(next.active[side]!)) {
+      const key = next.active[side]!, other = side === 'primary' ? 'secondary' : 'primary'
+      if (next[other].includes(key) && next.folderBrowser) next = { ...next, folderBrowser: { ...next.folderBrowser, [other]: null } }
+      next = { ...next, active: { ...next.active, [side]: nearbyOrganizationLeaf(model, next, side, key), ...(next[other].includes(key) ? { [other]: key } : {}) }, ...(next[other].includes(key) ? { drawers: { ...next.drawers, [other]: { ...next.drawers[other], open: true } } } : {}) }
+    }
+    for (const side of ['primary', 'secondary'] as const) if (next.folderBrowser?.[side]) next = { ...next, active: { ...next.active, [side]: null } }
+    return JSON.stringify(next) === JSON.stringify(model) ? model : next
+  }
+  let next = reduceFlat(model, intent)
+  if (intent.t === 'setHidden' && keyExists(model, intent.key)) {
+    const prior = model.closeHidden ?? []
+    const closeHidden = intent.hidden && intent.origin === 'close' ? [...new Set([...prior, intent.key])] : prior.filter(key => key !== intent.key)
+    if (JSON.stringify(prior) !== JSON.stringify(closeHidden)) next = { ...next, closeHidden }
+  }
+  if (model.organization && (next.primary !== model.primary || next.secondary !== model.secondary)) {
+    let organization = organizationFor(model)
+    if (intent.t === 'move' && sideOfKey(model, intent.key) !== intent.to) organization = relocateOrganizationItem(organization, intent.key, intent.to)
+    next = { ...next, organization: normalizeOrganization(next, organization) }
+  }
+  if (model.folderBrowser) {
+    const browser = { ...model.folderBrowser }
+    if (intent.t === 'activate' && next.active[intent.side] === intent.key) browser[intent.side] = null
+    if (intent.t === 'deactivate') browser[intent.side] = null
+    if (intent.t === 'move' && intent.activateDest) browser[intent.to] = null
+    if (JSON.stringify(browser) !== JSON.stringify(model.folderBrowser)) next = { ...next, folderBrowser: browser }
+    for (const side of ['primary', 'secondary'] as const) if (browser[side] && next.active[side] !== null) next = { ...next, active: { ...next.active, [side]: null } }
+  }
+  return JSON.stringify(next) === JSON.stringify(model) ? model : next
 }
 
 export function foldIntents(model: LayoutModel, intents: readonly Intent[]): LayoutModel {

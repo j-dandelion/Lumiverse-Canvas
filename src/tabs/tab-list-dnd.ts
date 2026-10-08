@@ -77,6 +77,7 @@ import {
 } from './buttons'
 import { appendSecondaryTabNode, getSecondaryStartDock } from './secondary-start-dock'
 import { isMobileViewport } from '../sidebar/mobile-exclusion'
+import { getModel } from '../recon/dispatch'
 import { isPointerResizeActive } from '../resize/handles'
 import { dlog, dwarn } from '../debug/log'
 import {
@@ -2132,6 +2133,7 @@ function installDragOnButton(btn: HTMLElement): void {
     // Feature off / torn down — handlers may remain on buttons (WeakSet);
     // only start a drag while the module is active.
     if (!_active) return
+    if (getModel()?.organization) return
     // Mobile: live strip DnD is a no-op — use Configure Tabs instead.
     if (!isLiveTabListDndAllowed()) return
     // Only respond to left button

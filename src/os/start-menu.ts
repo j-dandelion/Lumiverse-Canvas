@@ -44,6 +44,8 @@
  * start-menu-motion.ts for the coordinate contract).
  */
 
+import { organizationFor } from '../core/organization'
+import { folderIconSvg } from '../tabs/folder-icons'
 import type { Side } from '../core/model'
 import { parseBuiltinKey } from '../core/model'
 import { getModel, getHost, dispatchBatch } from '../recon/dispatch'
@@ -52,11 +54,11 @@ import { getMainWrapper } from '../dom/lumiverse'
 import { getSettings, isOsModeEnabled } from '../settings/state'
 import { isStartAtStripTopGate } from './start-strip-top-gate'
 import { resolveChromeSides } from '../sidebar/chrome-sides'
-import { openWindowInDrawerByLiveId } from './actions'
 import { getSecondaryTabList, getSecondaryWrapper, isSecondarySidebarOpen } from '../sidebar/secondary'
 import { DRAWER_SHELL_CREATED_EVENT } from '../sidebar/drawer-shell'
 import { SECONDARY_START_DOCK_CLASS } from '../tabs/secondary-start-dock'
 import { START_STRIP_TOP_DIVIDER_CLASS } from '../sidebar/styles'
+import { getBuiltinCatalog } from '../tabs/configure-catalog'
 import { BUILTIN_ICON_SVGS } from '../tabs/builtin-icons'
 import { isCoreTabId } from '../tabs/core-tabs'
 import { injectStartMenuStyles, START_MENU_STYLE_ID } from './start-menu-styles'
@@ -199,9 +201,8 @@ export function resolveEntryIcon(
  * tabs stay reachable.
  *
  * The inventory is drawer-agnostic (both Start buttons list every window)
- * but the LAUNCH is not: each entry opens in the invoking menu's drawer, and
- * a window whose button was not already there lands at that drawer's launch
- * end (`openWindowInDrawerByLiveId`). The state mark ALWAYS reflects the
+ * and each entry opens in its owning drawer without changing membership
+ * or organization order (`openWindowInOwningDrawerByLiveId`). The state mark ALWAYS reflects the
  * WINDOW lifecycle (open/minimized/closed) — even for a menu-hidden row,
  * because the menu-hidden set never touches the strips: an open window keeps
  * its button (and its open mark) while menu-hidden. Unresolvable extension keys
@@ -226,6 +227,7 @@ export function deriveStartMenuEntries(
 ): StartMenuEntry[] {
   const manageMode = opts.manageMode ?? false
   // One scan for titles/icons (was a per-key find).
+  const builtinTitles = new Map(getBuiltinCatalog().map(tab => [tab.id, tab.title]))
   const tabsById = new Map(tabs.map((t) => [t.id, t]))
   const seen = new Set<string>()
   const out: StartMenuEntry[] = []
@@ -257,7 +259,7 @@ export function deriveStartMenuEntries(
       out.push({
         liveId,
         side,
-        title: tab?.title ?? key,
+        title: tab?.title ?? (coreId ? builtinTitles.get(coreId) : undefined) ?? key,
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
@@ -340,11 +342,9 @@ function createMenuEntry(entry: StartMenuEntry, targetSide: Side): HTMLElement {
   item.append(rail, tile, label, status)
   item.addEventListener('click', () => {
     hideStartMenu()
-    // Launch into the INVOKING menu's drawer (per-drawer launcher): the entry
-    // inventory is global, but the clicked window opens where the user is.
-    // The action places it at that drawer's launch end unless its button is
-    // already there.
-    void openWindowInDrawerByLiveId(entry.liveId, targetSide)
+    // A launcher opens the window in its owner and preserves its position
+    // and folder membership, regardless of which drawer's Start was used.
+    void import('./actions').then(m => m.openWindowInOwningDrawerByLiveId(entry.liveId))
   })
   return item
 }
@@ -583,13 +583,35 @@ function buildMenu(targetSide: Side): HTMLElement | null {
   const list = document.createElement('div')
   list.className = 'canvas-os-start-menu__list'
   list.setAttribute('role', 'presentation')
-  for (const entry of entries) {
-    list.appendChild(
-      _manageMode
-        ? createManageRow(entry, targetSide, refreshCount)
-        : createMenuEntry(entry, targetSide),
-    )
-  }
+  const row = (entry: StartMenuEntry) => _manageMode ? createManageRow(entry, targetSide, refreshCount) : createMenuEntry(entry, targetSide)
+  if (model.organization) {
+    const byKey = new Map(entries.map(entry => [entry.key, entry]))
+    for (const side of ['primary', 'secondary'] as const) {
+      const section = document.createElement('div')
+      section.className = 'canvas-os-start-menu__organization'
+      if (model.secondary.length) {
+        const label = document.createElement('span'); label.className = 'canvas-os-start-menu__drawer-label'; label.textContent = side === 'primary' ? 'Main drawer' : 'Second drawer'; section.appendChild(label)
+      }
+      for (const item of organizationFor(model)[side]) {
+        if (item.type === 'tab') { const entry = item.key ? byKey.get(item.key) : null; if (entry) section.appendChild(row(entry)); continue }
+        if (item.type === 'divider') { const separator = document.createElement('div'); separator.className = 'canvas-os-start-menu__divider'; separator.title = item.label ?? ''; separator.setAttribute('role', 'separator'); section.appendChild(separator); continue }
+        const children = item.children.flatMap(ref => ref.key && byKey.has(ref.key) ? [byKey.get(ref.key)!] : [])
+        if (!children.length) continue
+        const group = document.createElement('div'); group.className = 'canvas-os-start-menu__folder-group'
+        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = 'canvas-os-start-menu__folder'; toggle.setAttribute('role', 'menuitem'); toggle.setAttribute('aria-expanded', 'false')
+        const icon = document.createElement('span'); icon.innerHTML = folderIconSvg(item)
+        const name = document.createElement('span'); name.textContent = item.name
+        const arrow = document.createElement('span'); arrow.textContent = '›'; arrow.setAttribute('aria-hidden', 'true')
+        toggle.append(icon, name, arrow)
+        const content = document.createElement('div'); content.className = 'canvas-os-start-menu__folder-children'; content.hidden = true; content.setAttribute('role', 'group'); content.setAttribute('aria-label', item.name)
+        for (const entry of children) content.appendChild(row(entry))
+        toggle.addEventListener('click', ev => { ev.stopPropagation(); content.hidden = !content.hidden; toggle.setAttribute('aria-expanded', String(!content.hidden)); arrow.textContent = content.hidden ? '›' : '⌄' })
+        toggle.addEventListener('keydown', event => { if ((event.key === 'ArrowRight' && content.hidden) || (event.key === 'ArrowLeft' && !content.hidden)) { event.preventDefault(); toggle.click() } })
+        group.append(toggle, content); section.appendChild(group)
+      }
+      list.appendChild(section)
+    }
+  } else for (const entry of entries) list.appendChild(row(entry))
   menu.appendChild(list)
   return menu
 }
@@ -870,7 +892,7 @@ function attachMenuDismiss(): void {
     }
     if (ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return
     if (!_menu) return
-    const items = Array.from(_menu.querySelectorAll('[role="menuitem"]')) as HTMLElement[]
+    const items = (Array.from(_menu.querySelectorAll('[role="menuitem"]')) as HTMLElement[]).filter(item => !item.closest?.('[hidden]'))
     if (items.length === 0) return
     const idx = items.indexOf(document.activeElement as HTMLElement)
     ev.preventDefault()

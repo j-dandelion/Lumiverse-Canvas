@@ -87,6 +87,7 @@ export function snapshotLayout(): any {
   const drawerTabs = getDrawerTabs()
   return {
     version: CANVAS_VERSION,
+    ...snapshotOwnedModelLayout(),
     primary: {
       open: readPrimaryOpen(),
       width: readPrimaryWidth(),
@@ -124,6 +125,7 @@ export function seedDualLayoutFromLive(): void {
   const primaryWidth = (live.primary?.width > 0) ? live.primary.width : 420
   const seed = {
     version: live.version,
+    ...(live.organization ? { organization: live.organization, folderBrowser: live.folderBrowser, rememberedLeaf: live.rememberedLeaf, closeHidden: live.closeHidden, leafState: live.leafState, nativeOrganizationBaseline: live.nativeOrganizationBaseline, nativeOrganizationProjection: live.nativeOrganizationProjection, nativeAddresses: live.nativeAddresses } : {}),
     primary: {
       open: live.primary?.open ?? false,
       width: primaryWidth,
@@ -169,6 +171,7 @@ export function buildPersistedLayout(): ReturnType<typeof snapshotLayout> {
   const tabsLive = s.secondSidebarEnabled
   return {
     version: live.version,
+    ...(live.organization ? { organization: live.organization, folderBrowser: live.folderBrowser, rememberedLeaf: live.rememberedLeaf, closeHidden: live.closeHidden, leafState: live.leafState, nativeOrganizationBaseline: live.nativeOrganizationBaseline, nativeOrganizationProjection: live.nativeOrganizationProjection, nativeAddresses: live.nativeAddresses } : {}),
     primary: {
       open: s.persistDrawerOpenState ? live.primary.open : (base.primary.open ?? false),
       width: s.persistDrawerWidth ? live.primary.width : (base.primary.width ?? 420),

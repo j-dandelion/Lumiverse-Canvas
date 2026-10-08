@@ -482,7 +482,14 @@ export function setup(ctx: SpindleFrontendContext) {
     // observers and state on extension disable.
     try {
       dlog(`bootstrapFromLayout:start`)
-      bootstrapFromLayout(layout, coreHost, CANVAS_VERSION)
+      const organization = await import('./tabs/native-organization')
+      if (!isCurrent()) return
+      const organizationLayout = organization.adoptNativeOrganization(layout, coreHost)
+      bootstrapFromLayout(organizationLayout, coreHost, CANVAS_VERSION)
+      registerCleanup(organization.keepNativeDisableProjection(coreHost))
+      const folders = await import('./tabs/folder-ui')
+      if (!isCurrent()) return
+      registerCleanup(folders.mountFolders())
       dlog(`bootstrapFromLayout:returned (async reconcile still in flight)`)
       bootStep(`bootstrap gen=${generation}`)
     } catch (bootstrapErr) {

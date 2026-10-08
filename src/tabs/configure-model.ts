@@ -4,6 +4,7 @@
 // side effects. The host bridge writes (commit) are handled separately
 // by host-settings.ts.
 
+import type { Organization } from '../core/organization'
 import { type CatalogTab, BUILTIN_TAB_IDS, isHideLocked } from './configure-catalog'
 import { liveIdForTitle } from './identity'
 import { drawerObserver } from '../sidebar/drawer-observer'
@@ -12,6 +13,7 @@ export type DrawerSide = 'left' | 'right'
 export type TabSide = 'primary' | 'secondary'
 
 export type ConfigureDraft = {
+  organization?: Organization
   /** Current host drawer side. */
   drawerSide: DrawerSide
   /** Tab ids assigned to the primary drawer (in display order). */
@@ -28,6 +30,7 @@ export type ConfigureDraft = {
 
 /** Snapshot of the host state for dirty-checking. */
 export type BaseSnapshot = {
+  organizationFingerprint?: string
   tabOrder: string[]
   hiddenTabIds: string[]
   drawerSide: DrawerSide
@@ -215,6 +218,7 @@ export function baseSnapshotFromDraft(draft: ConfigureDraft): BaseSnapshot {
     assignments.set(id, 'secondary')
   }
   return {
+    ...(draft.organization ? { organizationFingerprint: JSON.stringify(draft.organization) } : {}),
     tabOrder: encodeHostTabOrder(draft),
     hiddenTabIds: [...draft.hiddenIds],
     drawerSide: draft.drawerSide,
@@ -255,6 +259,7 @@ export function isDraftDirty(
   draft: ConfigureDraft,
   base: BaseSnapshot,
 ): boolean {
+  if (JSON.stringify(draft.organization) !== base.organizationFingerprint) return true
   const order = encodeHostTabOrder(draft)
   if (order.length !== base.tabOrder.length) return true
   for (let i = 0; i < order.length; i++) {

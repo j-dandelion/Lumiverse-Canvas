@@ -9,6 +9,8 @@
 // Styled to match host Lumiverse ConfigureDrawerTabsModal within the
 // structural deltas of dual-drawer columns + draft footer.
 
+import { ConfigureOrganization, ORGANIZATION_EDITOR_CSS } from './configure-organization'
+import { references, type Organization } from '../core/organization'
 import { h, render } from 'preact'
 import { useEffect, useCallback, useRef } from 'preact/hooks'
 import {
@@ -284,7 +286,15 @@ function injectModalStyles(): void {
       flex-direction: column;
       gap: 4px;
     }
+    .canvas-configure-tabs-section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
     .canvas-configure-tabs-section-title {
+      min-width: 0;
       margin: 0;
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
@@ -639,6 +649,7 @@ function injectModalStyles(): void {
       }
     }
   `
+  style.textContent += ORGANIZATION_EDITOR_CSS
   document.head.appendChild(style)
 }
 
@@ -737,6 +748,7 @@ function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> 
 
 function cloneConfigureDraft(d: ConfigureDraft): ConfigureDraft {
   return {
+    ...(d.organization ? { organization: d.organization } : {}),
     drawerSide: d.drawerSide,
     primaryIds: [...d.primaryIds],
     secondaryIds: [...d.secondaryIds],
@@ -1224,7 +1236,7 @@ function ConfigureTabsModalInner(props: ModalProps) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         if (_dragActive || _dragTabId) {
           // Mid-drag (before release): revert draft. During settle after
           // release, keep placement — release already means commit intent.
@@ -1430,17 +1442,27 @@ function ConfigureTabsModalInner(props: ModalProps) {
     ? 'Tabs shown in the left sidebar drawer.'
     : 'Tabs shown in the right sidebar drawer.'
 
-  const renderColumnHeader = (title: string, desc: string) => (
+  const renderColumnHeader = (title: string, desc: string, actions?: h.JSX.Element) => (
     <div class="canvas-configure-tabs-section-header">
-      <h3 class="canvas-configure-tabs-section-title">{title}</h3>
+      <div class="canvas-configure-tabs-section-heading">
+        <h3 class="canvas-configure-tabs-section-title">{title}</h3>
+        {actions}
+      </div>
       <p class="canvas-configure-tabs-section-desc">{desc}</p>
     </div>
   )
 
-  const renderColumn = (tabs: CatalogTab[], side: ColumnSide, sectionHeader: h.JSX.Element) => (
+  const renderColumn = (tabs: CatalogTab[], side: ColumnSide, title: string, desc: string) => (
     <div class="canvas-configure-tabs-column">
-      {sectionHeader}
-      <div
+      {draft.organization ? <ConfigureOrganization organization={draft.organization} side={side} tabs={catalog} renderTab={renderTabRow} renderHeader={actions => renderColumnHeader(title, desc, actions)} onChange={organization => {
+        if (!_draftRef) return
+        const host = getHost()
+        const ids = (side: ColumnSide) => references(organization[side]).flatMap(ref => ref.key && host?.resolve(ref.key) && host.findKey(host.resolve(ref.key)!) ? [host.resolve(ref.key)!] : [])
+        const primaryIds = ids('primary'), secondaryIds = ids('secondary')
+        const allIds = [...primaryIds, ...secondaryIds]
+        const next = { ..._draftRef, organization, primaryIds, secondaryIds, builtinOrder: allIds.filter(id => catalog.find(tab => tab.id === id)?.kind === 'builtin'), extensionOrder: allIds.filter(id => catalog.find(tab => tab.id === id)?.kind !== 'builtin') }
+        _draftRef = next; renderModal(next, _catalogRef, null, false); void autoCommit()
+      }}/> : <>{renderColumnHeader(title, desc)}<div
         class="canvas-configure-tabs-list"
         data-side={side}
       >
@@ -1449,7 +1471,7 @@ function ConfigureTabsModalInner(props: ModalProps) {
         ) : (
           tabs.map((tab, i) => renderTabRow(tab, i, side))
         )}
-      </div>
+      </div></>}
     </div>
   )
 
@@ -1457,18 +1479,14 @@ function ConfigureTabsModalInner(props: ModalProps) {
   const leftColumn = renderColumn(
     leftIsSecondaryVal ? secondaryTabs : primaryTabs,
     leftIsSecondaryVal ? 'secondary' : 'primary',
-    renderColumnHeader(
-      leftIsSecondaryVal ? 'Second Drawer Tabs' : 'Main Drawer Tabs',
-      leftIsSecondaryVal ? secondaryDesc : primaryDesc,
-    ),
+    leftIsSecondaryVal ? 'Second Drawer Tabs' : 'Main Drawer Tabs',
+    leftIsSecondaryVal ? secondaryDesc : primaryDesc,
   )
   const rightColumn = renderColumn(
     leftIsSecondaryVal ? primaryTabs : secondaryTabs,
     leftIsSecondaryVal ? 'primary' : 'secondary',
-    renderColumnHeader(
-      leftIsSecondaryVal ? 'Main Drawer Tabs' : 'Second Drawer Tabs',
-      leftIsSecondaryVal ? primaryDesc : secondaryDesc,
-    ),
+    leftIsSecondaryVal ? 'Main Drawer Tabs' : 'Second Drawer Tabs',
+    leftIsSecondaryVal ? primaryDesc : secondaryDesc,
   )
 
   return (
@@ -1515,7 +1533,8 @@ function ConfigureTabsModalInner(props: ModalProps) {
             {renderColumn(
               primaryTabs,
               'primary',
-              renderColumnHeader('Drawer Tabs', 'Tabs in the sidebar drawer.'),
+              'Drawer Tabs',
+              'Tabs in the sidebar drawer.',
             )}
           </div>
         )}
@@ -1619,7 +1638,7 @@ function buildLiveDraftAndBase(): {
       const out: string[] = []
       for (const key of keys) {
         const id = resolveId(key)
-        if (id) out.push(id)
+        if (id && (!model.organization || host.findKey(id))) out.push(id)
       }
       return out
     }
@@ -1637,7 +1656,7 @@ function buildLiveDraftAndBase(): {
     // Align both sides to the live strips — post-S2 the strips are model
     // renderings (mirror strip + secondary strip), so this is a no-op in
     // steady state and only protects mid-transition DOM.
-    const draft = alignDraftToLiveVisibleOrder(
+    const draft = model.organization ? { ...draftFromModel, primaryIds: modelPrimaryIds, secondaryIds: modelSecondaryIds, organization: model.organization } : alignDraftToLiveVisibleOrder(
       draftFromModel,
       readLivePrimaryTabIds(),
       readLiveSecondaryTabIds(),
@@ -1702,9 +1721,10 @@ function buildLiveDraftAndBase(): {
  * Open the Configure Tabs modal.
  * Builds the initial draft from current host state and renders the Preact component.
  */
-export async function openConfigureTabsModal(): Promise<void> {
+export async function openConfigureTabsModal(focusItemId?: string): Promise<void> {
   if (typeof document === 'undefined') return
   if (_openInProgress) return
+  if (focusItemId) setTimeout(() => document.dispatchEvent(new CustomEvent('canvas:configure-organization-focus', { detail: focusItemId })), 50)
   _openInProgress = true
   try {
     if (getSettings().unhideVanillaTabs) {

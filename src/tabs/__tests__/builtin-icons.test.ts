@@ -1,6 +1,6 @@
 // Tests for builtin-icons.ts — the generated Configure Tabs icon map.
 //
-// Pins the map to the host's current icon set (lucide-react@0.468.0 for 24
+// Pins the map to the host's current icon set (lucide-react@0.468.0 for 22
 // built-ins + @tabler/icons-react@3.41.1 IconUsersGroup for council, path-for-
 // path). The map was previously hand-copied from an older lucide set and the
 // Configure Tabs rows rendered wrong/malformed glyphs vs the real tab strip.
@@ -55,7 +55,6 @@ const CURRENT_SIGNATURES: Array<[string, string]> = [
   ['cortex', 'M17.599 6.5a3 3 0 0 0 .399-1.375'],    // Brain half (current)
   ['create', 'M15.707 21.293'],                      // PenTool handle
   ['summary', 'M8 21h12a2 2 0 0 0 2-2v-1'],          // ScrollText (current)
-  ['feedback', 'm10 7-3 3 3 3'],                     // MessageSquareReply arrow
   ['worldinfo', 'M12 2a14.5 14.5'],                  // Globe (current)
   ['wallpaper', 'm9 17 6.1-6.1'],                    // Wallpaper frame diagonal
   ['regex', '<rect x="2" y="14" width="8" height="8" rx="2"/>'], // Replace box

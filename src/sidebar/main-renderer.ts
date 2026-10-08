@@ -27,6 +27,7 @@
 // bottom-pinned host chrome (Q5): docked in the list's bottom section,
 // click forwards to the host Settings button, never a Canvas tab.
 
+import { navigateHostTab } from '../tabs/host-navigation'
 import type { TabKey } from '../core/model'
 import {
   parseBuiltinKey,
@@ -500,7 +501,7 @@ export function renderMainMirrorTabs(): void {
     list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`),
   ) as HTMLElement[]) {
     const key = btn.getAttribute('data-mirror-key') || ''
-    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY) {
+    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY && btn.getAttribute('data-canvas-organization') == null) {
       btn.remove()
     }
   }
@@ -514,6 +515,7 @@ export function renderMainMirrorTabs(): void {
     const el = child as HTMLElement
     if (
       !el.classList.contains(MAIN_MIRROR_BTN_CLASS) &&
+      el.getAttribute?.('data-canvas-organization') == null &&
       !(el.getAttribute?.('data-canvas-os-start') !== null && isStartAtStripTopGate())
     ) {
       mainSection.removeChild(el)
@@ -683,7 +685,7 @@ function onMirrorClick(ev: Event): void {
   // source on its commit render).
   if (twin.btn && twin.btn.isConnected) {
     try {
-      twin.btn.click()
+      navigateHostTab(twin.liveId ?? mirror.getAttribute('data-tab-id') ?? '', twin.btn)
     } catch {
       /* host may throw during teardown */
     }

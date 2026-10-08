@@ -246,7 +246,7 @@ function getBackendCtx() {
 function setBackendCtx(ctx) {
   _backendCtx = ctx;
 }
-var _backendCtx = null, CANVAS_VERSION = "";
+var _backendCtx = null, CANVAS_VERSION = "2.0.1";
 
 // src/debug/log.ts
 function setDebug(value) {
@@ -674,6 +674,168 @@ function createEmptyModel(side = "left") {
 }
 var BUILTIN_PREFIX = "builtin:", EXT_PREFIX = "ext:";
 
+// src/core/organization.ts
+function referenceId(ref) {
+  return ref.key ?? `address:${ref.tabId}`;
+}
+function itemId(item) {
+  return item.type === "tab" ? referenceId(item) : `${item.type}:${item.id}`;
+}
+function references(items) {
+  return items.flatMap((item) => item.type === "tab" ? [item] : item.type === "folder" ? [...item.children] : []);
+}
+function organizationFor(model) {
+  return model.organization ?? { version: 1, primary: model.primary.map((key) => ({ type: "tab", key })), secondary: model.secondary.map((key) => ({ type: "tab", key })) };
+}
+function folderFor(model, side, id) {
+  return organizationFor(model)[side].find((item) => item.type === "folder" && item.id === id) ?? null;
+}
+function folderContaining(model, side, key) {
+  return organizationFor(model)[side].find((item) => item.type === "folder" && item.children.some((ref) => ref.key === key)) ?? null;
+}
+function sanitizeOrganization(raw) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const seen = new Set;
+  const containers = new Set;
+  const readRef = (value) => {
+    if (!value || typeof value !== "object")
+      return null;
+    const r = value;
+    const ref = typeof r.key === "string" && /^(builtin:|ext:)/.test(r.key) ? { key: r.key } : typeof r.tabId === "string" && r.tabId ? { tabId: r.tabId } : null;
+    if (!ref || seen.has(referenceId(ref)))
+      return null;
+    seen.add(referenceId(ref));
+    return ref;
+  };
+  const read = (value) => {
+    if (!Array.isArray(value))
+      return [];
+    const out = [];
+    for (const entry of value) {
+      if (!entry || typeof entry !== "object")
+        continue;
+      const r = entry;
+      if (r.type === "tab") {
+        const ref = readRef(r);
+        if (ref)
+          out.push({ type: "tab", ...ref });
+        continue;
+      }
+      if (r.type !== "folder" && r.type !== "divider" || typeof r.id !== "string" || !r.id || containers.has(r.id))
+        continue;
+      containers.add(r.id);
+      if (r.type === "divider")
+        out.push({ type: "divider", id: r.id, ...typeof r.label === "string" ? { label: r.label } : {} });
+      else
+        out.push({
+          type: "folder",
+          id: r.id,
+          name: typeof r.name === "string" && r.name.trim() ? r.name.trim() : "Folder",
+          ...typeof r.icon === "string" ? { icon: r.icon } : {},
+          ...r.customIcon && typeof r.customIcon === "object" ? { customIcon: r.customIcon } : {},
+          view: r.view === "grid" ? "grid" : "list",
+          children: Array.isArray(r.children) ? r.children.map(readRef).filter((ref) => !!ref) : []
+        });
+    }
+    return out;
+  };
+  return { version: 1, primary: read(input.primary), secondary: read(input.secondary) };
+}
+function normalizeOrganization(model, org = organizationFor(model)) {
+  const clean = sanitizeOrganization(org);
+  const owner = new Map([...model.primary.map((key) => [key, "primary"]), ...model.secondary.map((key) => [key, "secondary"])]);
+  const normalize = (side) => {
+    const keep = (ref) => !ref.key || !owner.has(ref.key) || owner.get(ref.key) === side;
+    const items = clean[side].flatMap((item) => item.type === "tab" ? keep(item) ? [item] : [] : item.type === "folder" ? [{ ...item, children: item.children.filter(keep) }] : [item]);
+    const included = new Set(references(items).map((ref) => ref.key));
+    for (const key of model[side])
+      if (!included.has(key))
+        items.push({ type: "tab", key });
+    return items;
+  };
+  return { version: 1, primary: normalize("primary"), secondary: normalize("secondary") };
+}
+function removeOrganizationItem(org, side, id) {
+  return { ...org, [side]: org[side].flatMap((item) => itemId(item) !== id ? [item] : item.type === "folder" ? item.children.map((ref) => ({ type: "tab", ...ref })) : []) };
+}
+function relocateOrganizationItem(org, id, to, index = -1, folderId) {
+  let moved = null;
+  const strip = (items) => items.flatMap((item) => {
+    if (itemId(item) === id) {
+      moved = item;
+      return [];
+    }
+    if (item.type !== "folder")
+      return [item];
+    return [{ ...item, children: item.children.filter((ref) => {
+      if (referenceId(ref) !== id)
+        return true;
+      moved = { type: "tab", ...ref };
+      return false;
+    }) }];
+  });
+  const primary = strip(org.primary), secondary = strip(org.secondary);
+  const item = moved;
+  if (!item || folderId && item.type !== "tab")
+    return org;
+  const target = to === "primary" ? primary : secondary;
+  if (folderId) {
+    const folderIndex = target.findIndex((entry) => entry.type === "folder" && entry.id === folderId);
+    const folder = target[folderIndex];
+    if (!folder || folder.type !== "folder" || item.type !== "tab")
+      return org;
+    const children = [...folder.children];
+    children.splice(index < 0 ? children.length : Math.min(index, children.length), 0, item);
+    target[folderIndex] = { ...folder, children };
+  } else
+    target.splice(index < 0 ? target.length : Math.min(index, target.length), 0, item);
+  return { version: 1, primary, secondary };
+}
+function browserVisible(model, key) {
+  return !model.hidden.includes(key) || !!model.closeHidden?.includes(key);
+}
+function canonicalAddress(id) {
+  if (id === "ooc" || id === "feedback")
+    return "council";
+  return id.startsWith("spindle:") && id.includes(":tab:") ? id.replace(/:\d+$/, "") : id;
+}
+function importNativeOrganization(raw, model, findKey) {
+  const entries = Array.isArray(raw) ? raw : [];
+  const protectedContainers = new Set(organizationFor(model).secondary.filter((item) => item.type !== "tab").map((item) => item.id));
+  const ref = (id) => {
+    const key = findKey(id) ?? findKey(canonicalAddress(id));
+    return key ? { key } : { tabId: canonicalAddress(id) };
+  };
+  const primary = entries.flatMap((r) => {
+    if (!r || typeof r !== "object")
+      return [];
+    if (r.type === "tab" && typeof r.tabId === "string")
+      return [{ type: "tab", ...ref(r.tabId) }];
+    if (r.type === "divider")
+      return protectedContainers.has(r.id) ? [] : [r];
+    if (r.type === "folder" && Array.isArray(r.children)) {
+      const children = r.children.filter((id) => typeof id === "string").map(ref);
+      if (protectedContainers.has(r.id))
+        return children.filter((child) => !child.key || !model.secondary.includes(child.key)).map((child) => ({ type: "tab", ...child }));
+      return [{ ...r, children }];
+    }
+    return [];
+  });
+  return normalizeOrganization(model, sanitizeOrganization({ primary, secondary: organizationFor(model).secondary }));
+}
+function projectNativeOrganization(org, resolve) {
+  const address = (ref) => ref.key ? resolve(ref.key) : ref.tabId;
+  return [...org.primary, ...org.secondary].flatMap((item) => {
+    if (item.type === "tab") {
+      const id = address(item);
+      return id ? [{ type: "tab", tabId: canonicalAddress(id) }] : [];
+    }
+    if (item.type === "divider")
+      return [item];
+    return [{ ...item, children: item.children.map(address).filter((id) => !!id).map(canonicalAddress) }];
+  });
+}
+
 // src/core/select.ts
 function listForSide(model, side) {
   return side === "primary" ? model.primary : model.secondary;
@@ -999,7 +1161,7 @@ function sameKeys(a, b) {
   }
   return true;
 }
-function reduce(model, intent) {
+function reduceFlat(model, intent) {
   switch (intent.t) {
     case "move":
       return applyMove(model, intent.key, intent.to, intent.index, intent.activateDest);
@@ -1028,6 +1190,101 @@ function reduce(model, intent) {
       return model;
     }
   }
+}
+function nearbyOrganizationLeaf(before, after, side, removedId) {
+  const roots = organizationFor(before)[side];
+  const position = roots.findIndex((item) => itemId(item) === removedId || item.type === "folder" && item.children.some((ref) => ref.key === removedId));
+  const selectable = (key) => !!key && after[side].includes(key) && !after.hidden.includes(key) && !after.closed.includes(key);
+  const candidates = roots.map((item, index) => ({ item, index })).filter(({ item }) => itemId(item) !== removedId).sort((a, b) => Math.abs(a.index - position) - Math.abs(b.index - position) || a.index - b.index);
+  for (const { item } of candidates) {
+    const key = (item.type === "tab" ? [item] : item.type === "folder" ? item.children : []).find((ref) => selectable(ref.key))?.key;
+    if (key)
+      return key;
+  }
+  return after[side].find((key) => selectable(key)) ?? null;
+}
+function reduce(model, intent) {
+  if (intent.t === "browseFolder") {
+    if (intent.id && !folderFor(model, intent.side, intent.id))
+      return model;
+    const old = model.folderBrowser ?? { primary: null, secondary: null };
+    if (old[intent.side] === intent.id)
+      return model;
+    return {
+      ...model,
+      folderBrowser: { ...old, [intent.side]: intent.id },
+      rememberedLeaf: { ...model.rememberedLeaf ?? model.active, [intent.side]: model.active[intent.side] ?? model.rememberedLeaf?.[intent.side] ?? null },
+      ...intent.id ? { active: { ...model.active, [intent.side]: null } } : {}
+    };
+  }
+  if (intent.t === "setOrganization") {
+    const organization = sanitizeOrganization(intent.organization);
+    const keys = (side) => references(organization[side]).flatMap((ref) => ref.key ? [ref.key] : []);
+    const primary = keys("primary"), secondary = keys("secondary");
+    for (const side of ["primary", "secondary"])
+      for (const key of model[side]) {
+        if (!primary.includes(key) && !secondary.includes(key))
+          (side === "primary" ? primary : secondary).push(key);
+      }
+    let next = { ...model, primary, secondary, organization };
+    next = { ...next, organization: normalizeOrganization(next) };
+    if (model.folderBrowser) {
+      const selected = { ...model.folderBrowser };
+      for (const side of ["primary", "secondary"])
+        if (selected[side] && !folderFor(next, side, selected[side])) {
+          const deleted = folderFor(model, side, selected[side]);
+          const movedSide = side === "primary" ? "secondary" : "primary";
+          if (folderFor(next, movedSide, selected[side])) {
+            selected[movedSide] = selected[side];
+            next = { ...next, active: { ...next.active, [movedSide]: null }, rememberedLeaf: { ...next.rememberedLeaf ?? next.active, [movedSide]: next.active[movedSide] } };
+            next = { ...next, drawers: { ...next.drawers, [movedSide]: { ...next.drawers[movedSide], open: true } } };
+          }
+          selected[side] = null;
+          const leaf = deleted?.children.find((ref) => ref.key && next[side].includes(ref.key) && !next.hidden.includes(ref.key) && !next.closed.includes(ref.key))?.key ?? nearbyOrganizationLeaf(model, next, side, `folder:${model.folderBrowser[side]}`);
+          next = { ...next, active: { ...next.active, [side]: leaf } };
+        }
+      next = { ...next, folderBrowser: selected };
+    }
+    for (const side of ["primary", "secondary"])
+      if (next.active[side] && !next[side].includes(next.active[side])) {
+        const key = next.active[side], other = side === "primary" ? "secondary" : "primary";
+        if (next[other].includes(key) && next.folderBrowser)
+          next = { ...next, folderBrowser: { ...next.folderBrowser, [other]: null } };
+        next = { ...next, active: { ...next.active, [side]: nearbyOrganizationLeaf(model, next, side, key), ...next[other].includes(key) ? { [other]: key } : {} }, ...next[other].includes(key) ? { drawers: { ...next.drawers, [other]: { ...next.drawers[other], open: true } } } : {} };
+      }
+    for (const side of ["primary", "secondary"])
+      if (next.folderBrowser?.[side])
+        next = { ...next, active: { ...next.active, [side]: null } };
+    return JSON.stringify(next) === JSON.stringify(model) ? model : next;
+  }
+  let next = reduceFlat(model, intent);
+  if (intent.t === "setHidden" && keyExists(model, intent.key)) {
+    const prior = model.closeHidden ?? [];
+    const closeHidden = intent.hidden && intent.origin === "close" ? [...new Set([...prior, intent.key])] : prior.filter((key) => key !== intent.key);
+    if (JSON.stringify(prior) !== JSON.stringify(closeHidden))
+      next = { ...next, closeHidden };
+  }
+  if (model.organization && (next.primary !== model.primary || next.secondary !== model.secondary)) {
+    let organization = organizationFor(model);
+    if (intent.t === "move" && sideOfKey(model, intent.key) !== intent.to)
+      organization = relocateOrganizationItem(organization, intent.key, intent.to);
+    next = { ...next, organization: normalizeOrganization(next, organization) };
+  }
+  if (model.folderBrowser) {
+    const browser = { ...model.folderBrowser };
+    if (intent.t === "activate" && next.active[intent.side] === intent.key)
+      browser[intent.side] = null;
+    if (intent.t === "deactivate")
+      browser[intent.side] = null;
+    if (intent.t === "move" && intent.activateDest)
+      browser[intent.to] = null;
+    if (JSON.stringify(browser) !== JSON.stringify(model.folderBrowser))
+      next = { ...next, folderBrowser: browser };
+    for (const side of ["primary", "secondary"])
+      if (browser[side] && next.active[side] !== null)
+        next = { ...next, active: { ...next.active, [side]: null } };
+  }
+  return JSON.stringify(next) === JSON.stringify(model) ? model : next;
 }
 function foldIntents(model, intents) {
   let next = model;
@@ -1774,12 +2031,14 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
   }
   /* Tab buttons: uniform width on mobile horizontal layout.
      Matches main sidebar's mobile tabBtnLabeled size (52×48). */
+  .sidebar-ux-tab-list button.canvas-folder-button,
   .sidebar-ux-tab-list button[data-tab-id] {
     width: 52px !important;
     min-width: 0;
     flex-shrink: 0;
     padding: 6px 4px !important;
   }
+  .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-labeled,
   .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
@@ -1814,8 +2073,11 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
      .sidebar-ux-side-left specificity and use !important —
      desktop rules set inset 3px/–3px with !important and
      would otherwise win. */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
     border-radius: 8px 8px 0 0 !important;
@@ -1973,8 +2235,11 @@ var SECONDARY_WIDTH_VAR = "--sidebar-ux-secondary-w", MAIN_MIRROR_WIDTH_VAR = "-
   /* Active tab: bottom underline on mobile. Must beat the desktop
      .sidebar-ux-side-left/right inset rules → same shape as the
      secondary block (wrapper-scoped + !important). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
     border-radius: 8px 8px 0 0 !important;
@@ -2200,7 +2465,9 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
    must never stretch it. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start] {
@@ -2410,11 +2677,13 @@ html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="hori
 /* Active indicator on the panel-facing side: top-edge strip -> bottom inset,
    bottom-edge strip -> top inset. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
   box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
   border-radius: 8px 8px 0 0 !important;
 }
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
   box-shadow: inset 0 3px 0 var(--lumiverse-primary) !important;
   border-radius: 0 0 8px 8px !important;
@@ -4393,6 +4662,670 @@ var init_hooks_module = __esm(() => {
   k2 = typeof requestAnimationFrame == "function";
 });
 
+// src/tabs/folder-icons.ts
+function attributes(attrs) {
+  if (!attrs || typeof attrs !== "object")
+    return "";
+  return Object.entries(attrs).flatMap(([name, raw]) => {
+    name = attrNames[name] ?? name;
+    if (!allowedAttrs.has(name) || typeof raw !== "string" || raw.length > 12000)
+      return [];
+    const value = raw.trim();
+    if ((name === "fill" || name === "stroke") && value !== "none" && value !== "currentColor")
+      return [];
+    if (/url|[<>&"']/i.test(value))
+      return [];
+    return [` ${name}="${escape(value)}"`];
+  }).join("");
+}
+function sanitizeCustomIcon(raw) {
+  if (!raw || typeof raw !== "object")
+    return;
+  const icon = raw;
+  const box = typeof icon.viewBox === "string" ? icon.viewBox.trim().split(/[ ,]+/).map(Number) : [];
+  if (box.length !== 4 || box.some((n) => !Number.isFinite(n) || Math.abs(n) > 1e5) || box[2] <= 0 || box[3] <= 0 || !Array.isArray(icon.elements) || icon.elements.length > 64)
+    return;
+  const safeAttrs = (attrs) => {
+    const out = {};
+    for (const [name, value] of Object.entries(attrs ?? {}))
+      if (attributes({ [name]: value }))
+        out[name] = value;
+    return out;
+  };
+  return { viewBox: box.join(" "), attrs: safeAttrs(icon.attrs), elements: icon.elements.filter((el) => tags.has(el?.tag)).map((el) => ({ tag: el.tag, attrs: safeAttrs(el.attrs) })) };
+}
+function parseCustomSvg(text) {
+  if (new TextEncoder().encode(text).length > 32768)
+    throw new Error("SVG must be smaller than 32 KB.");
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (svg.localName !== "svg" || doc.querySelector("parsererror"))
+    throw new Error("Choose a valid SVG icon.");
+  const read = (el) => Object.fromEntries(Array.from(el.attributes).map((a) => [a.name, a.value]));
+  const icon = sanitizeCustomIcon({ viewBox: svg.getAttribute("viewBox") ?? "0 0 24 24", attrs: read(svg), elements: Array.from(svg.querySelectorAll("*")).filter((el) => tags.has(el.localName)).map((el) => ({ tag: el.localName, attrs: read(el) })) });
+  if (!icon || !icon.elements.length)
+    throw new Error("The SVG has no supported shapes.");
+  return icon;
+}
+function folderIconSvg(folder) {
+  const custom = sanitizeCustomIcon(folder.customIcon);
+  if (custom)
+    return `<svg width="20" height="20" viewBox="${escape(custom.viewBox)}"${attributes({ fill: "none", stroke: "currentColor", "stroke-width": "1.5", ...custom.attrs })}>${custom.elements.map((el) => `<${el.tag}${attributes(el.attrs)}/>`).join("")}</svg>`;
+  return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${FOLDER_ICONS[folder.icon ?? "folder"] ?? FOLDER_ICONS.folder}</svg>`;
+}
+var FOLDER_ICONS, tags, attrNames, allowedAttrs, escape = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+var init_folder_icons = __esm(() => {
+  FOLDER_ICONS = {
+    folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    brain: '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/>',
+    book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+    message: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+    palette: '<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>',
+    image: '<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>',
+    code: '<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>',
+    tools: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    game: '<line x1="6" x2="10" y1="11" y2="11"/><line x1="8" x2="8" y1="9" y2="13"/><line x1="15" x2="15.01" y1="12" y2="12"/><line x1="18" x2="18.01" y1="10" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/>',
+    boxes: '<path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z"/><path d="m7 16.5-4.74-2.85"/><path d="m7 16.5 5-3"/><path d="M7 16.5v5.17"/><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z"/><path d="m17 16.5-5-3"/><path d="m17 16.5 4.74-2.85"/><path d="M17 16.5v5.17"/><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z"/><path d="M12 8 7.26 5.15"/><path d="m12 8 4.74-2.85"/><path d="M12 13.5V8"/>',
+    sparkles: '<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/>',
+    zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>'
+  };
+  tags = new Set(["path", "circle", "rect", "line", "polyline", "polygon", "ellipse"]);
+  attrNames = { strokeWidth: "stroke-width", strokeLinecap: "stroke-linecap", strokeLinejoin: "stroke-linejoin", fillRule: "fill-rule", clipRule: "clip-rule", fillOpacity: "fill-opacity", strokeOpacity: "stroke-opacity" };
+  allowedAttrs = new Set(["d", "points", "cx", "cy", "r", "x", "y", "x1", "y1", "x2", "y2", "width", "height", "rx", "ry", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill-rule", "clip-rule", "opacity", "fill-opacity", "stroke-opacity"]);
+});
+
+// node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
+function u3(e, t, n, o, i, u) {
+  t || (t = {});
+  var a, c, p = t;
+  if ("ref" in p)
+    for (c in p = {}, t)
+      c == "ref" ? a = t[c] : p[c] = t[c];
+  var l2 = { type: e, props: p, key: n, ref: a, __k: null, __: null, __b: 0, __e: null, __c: null, constructor: undefined, __v: --f3, __i: -1, __u: 0, __source: i, __self: u };
+  if (typeof e == "function" && (a = e.defaultProps))
+    for (c in a)
+      p[c] === undefined && (p[c] = a[c]);
+  return l.vnode && l.vnode(l2), l2;
+}
+var f3 = 0;
+var init_jsxRuntime_module = __esm(() => {
+  init_preact_module();
+  init_preact_module();
+});
+
+// src/tabs/configure-organization.tsx
+function Icon(props) {
+  const paths = { plus: "M12 5v14M5 12h14", more: "M5 12h.01M12 12h.01M19 12h.01", right: "m9 6 6 6-6 6", down: "m6 9 6 6 6-6", up: "m6 15 6-6 6 6", swap: "M3 7h18l-4-4M21 17H3l4 4", trash: "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7", grip: "" };
+  return /* @__PURE__ */ u3("svg", {
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": "1.5",
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "aria-hidden": "true",
+    children: props.name === "grip" ? [9, 15].flatMap((x) => [5, 12, 19].map((y) => /* @__PURE__ */ u3("circle", {
+      cx: x,
+      cy: y,
+      r: "1.5"
+    }))) : /* @__PURE__ */ u3("path", {
+      d: paths[props.name]
+    })
+  });
+}
+function OrganizationName(props) {
+  const [text, setText] = d2(props.value);
+  y2(() => setText(props.value), [props.value]);
+  return /* @__PURE__ */ u3("input", {
+    "data-organization-name": props.id,
+    class: "canvas-organization-name",
+    "aria-label": props.kind === "folder" ? "Folder name" : "Divider label",
+    placeholder: props.kind === "divider" ? "Divider label (optional)" : undefined,
+    value: text,
+    onInput: (e) => setText(e.currentTarget.value),
+    onBlur: () => {
+      const value = text.trim() || (props.kind === "folder" ? "Folder" : "");
+      setText(value);
+      if (value !== props.value)
+        props.onSave(value);
+    },
+    onKeyDown: (e) => {
+      if (e.key === "Enter")
+        e.currentTarget.blur();
+    }
+  });
+}
+function ConfigureOrganization(props) {
+  const { organization, side, tabs, onChange, renderTab } = props;
+  const latestOrganization = A2(organization);
+  latestOrganization.current = organization;
+  const [expanded, setExpanded] = d2(new Set);
+  const [iconEditor, setIconEditor] = d2(null);
+  const [actionEditor, setActionEditor] = d2(null);
+  const [error, setError] = d2(null);
+  const dwell = A2(null);
+  const drag = A2(null);
+  const cleanDrag = () => {
+    drag.current = null;
+    if (dwell.current)
+      clearTimeout(dwell.current);
+    dwell.current = null;
+  };
+  y2(() => {
+    const focus = (event) => {
+      const id = event.detail;
+      if (!organization[side].some((item) => item.type !== "tab" && item.id === id))
+        return;
+      setExpanded((current) => new Set([...current, id]));
+      requestAnimationFrame(() => document.querySelector(`[data-organization-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
+    };
+    document.addEventListener("canvas:configure-organization-focus", focus);
+    return () => {
+      cleanDrag();
+      document.removeEventListener("canvas:configure-organization-focus", focus);
+    };
+  }, [organization, side]);
+  const update = (id, patch) => onChange({ ...organization, [side]: organization[side].map((item) => itemId(item) === id ? { ...item, ...patch } : item) });
+  const move = (id, to, index = -1, folder) => {
+    const label = document.activeElement?.getAttribute("aria-label");
+    if (folder && to === side)
+      setExpanded((current) => new Set([...current, folder]));
+    onChange(relocateOrganizationItem(organization, id, to, index, folder));
+    requestAnimationFrame(() => {
+      const column = document.querySelector(`[data-side="${to}"]`);
+      const row = column?.querySelector(`[data-organization-ref="${CSS.escape(id)}"]`);
+      const control = label ? row?.querySelector(`button[aria-label="${CSS.escape(label)}"]:not(:disabled)`) : null;
+      const fallback = row?.querySelector(".canvas-organization-more") ?? column?.querySelector(".canvas-organization-disclosure");
+      const focus = control ?? fallback;
+      focus?.focus();
+    });
+  };
+  const remove = (id) => {
+    const roots = organization[side], index = roots.findIndex((item) => itemId(item) === id);
+    const neighbor = roots[index + 1] ?? roots[index - 1];
+    onChange(removeOrganizationItem(organization, side, id));
+    requestAnimationFrame(() => {
+      const column = document.querySelector(`[data-side="${side}"]`);
+      const row = neighbor ? column?.querySelector(`[data-organization-ref="${CSS.escape(itemId(neighbor))}"]`) : null;
+      const focus = row?.querySelector("input,button") ?? column?.closest(".canvas-configure-tabs-column")?.querySelector(".canvas-organization-create button");
+      focus?.focus();
+    });
+  };
+  const create = (type) => {
+    const id = crypto.randomUUID();
+    const item = type === "folder" ? { type, id, name: "Folder", icon: "folder", view: "list", children: [] } : { type, id };
+    if (type === "folder")
+      setExpanded(new Set([...expanded, id]));
+    onChange({ ...organization, [side]: [...organization[side], item] });
+    requestAnimationFrame(() => {
+      const input = document.querySelector(`[data-organization-name="${id}"]`);
+      input?.focus();
+      input?.select();
+    });
+  };
+  const dragHandle = (id) => /* @__PURE__ */ u3("span", {
+    class: "canvas-configure-tabs-drag-handle",
+    draggable: true,
+    onDragStart: (e) => {
+      drag.current = id;
+      e.dataTransfer?.setData("application/x-canvas-organization", id);
+      if (e.dataTransfer)
+        e.dataTransfer.effectAllowed = "move";
+    },
+    onDragEnd: cleanDrag,
+    title: "Drag to reorder",
+    children: /* @__PURE__ */ u3(Icon, {
+      name: "grip"
+    })
+  });
+  const drop = (e, index, folder) => {
+    const id = e.dataTransfer?.getData("application/x-canvas-organization") || drag.current;
+    if (!id)
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    cleanDrag();
+    move(id, side, index, folder);
+  };
+  const dragOver = (e, folder) => {
+    if (!drag.current && !e.dataTransfer?.types.includes("application/x-canvas-organization"))
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (folder && !expanded.has(folder) && !dwell.current)
+      dwell.current = setTimeout(() => {
+        setExpanded(new Set([...expanded, folder]));
+        dwell.current = null;
+      }, 650);
+  };
+  const more = (id, title) => /* @__PURE__ */ u3("button", {
+    type: "button",
+    class: "canvas-organization-more",
+    title: "More actions",
+    "aria-label": `Actions for ${title}`,
+    "aria-expanded": actionEditor === id,
+    "aria-controls": `canvas-organization-actions-${id}`,
+    onClick: () => setActionEditor(actionEditor === id ? null : id),
+    children: /* @__PURE__ */ u3(Icon, {
+      name: "more"
+    })
+  });
+  const actions = (id, index, parent, item) => {
+    if (actionEditor !== id)
+      return null;
+    const siblings = parent ? organization[side].find((item) => item.type === "folder" && item.id === parent) : null;
+    const length = siblings?.type === "folder" ? siblings.children.length : organization[side].length;
+    return /* @__PURE__ */ u3("div", {
+      id: `canvas-organization-actions-${id}`,
+      class: "canvas-organization-action-panel",
+      children: [
+        /* @__PURE__ */ u3("div", {
+          class: "canvas-organization-row-actions",
+          role: "group",
+          "aria-label": "Reorder",
+          children: [
+            /* @__PURE__ */ u3("button", {
+              type: "button",
+              title: "Move up",
+              "aria-label": "Move up",
+              disabled: index === 0,
+              onClick: () => move(id, side, index - 1, parent),
+              children: /* @__PURE__ */ u3(Icon, {
+                name: "up"
+              })
+            }),
+            /* @__PURE__ */ u3("button", {
+              type: "button",
+              title: "Move down",
+              "aria-label": "Move down",
+              disabled: index === length - 1,
+              onClick: () => move(id, side, index + 1, parent),
+              children: /* @__PURE__ */ u3(Icon, {
+                name: "down"
+              })
+            })
+          ]
+        }),
+        (!item || item.type === "tab") && /* @__PURE__ */ u3("label", {
+          class: "canvas-organization-destination",
+          children: [
+            "Move to",
+            /* @__PURE__ */ u3("select", {
+              "aria-label": "Move tab to",
+              value: parent ?? "root",
+              onChange: (e) => {
+                const value = e.currentTarget.value;
+                setActionEditor(null);
+                move(id, side, -1, value === "root" ? undefined : value);
+              },
+              children: [
+                /* @__PURE__ */ u3("option", {
+                  value: "root",
+                  children: "Drawer root"
+                }),
+                organization[side].filter((item) => item.type === "folder").map((folder) => /* @__PURE__ */ u3("option", {
+                  value: folder.id,
+                  children: folder.name
+                }, folder.id))
+              ]
+            })
+          ]
+        }),
+        getSettings().secondSidebarEnabled && /* @__PURE__ */ u3("button", {
+          type: "button",
+          title: "Move to other drawer",
+          "aria-label": "Move to other drawer",
+          onClick: () => {
+            setActionEditor(null);
+            move(id, side === "primary" ? "secondary" : "primary");
+          },
+          children: [
+            /* @__PURE__ */ u3(Icon, {
+              name: "swap"
+            }),
+            /* @__PURE__ */ u3("span", {
+              children: "Other drawer"
+            })
+          ]
+        }),
+        item && item.type !== "tab" && /* @__PURE__ */ u3("button", {
+          type: "button",
+          class: "canvas-organization-delete",
+          title: item.type === "folder" ? "Delete folder; keep its tabs" : "Delete divider",
+          "aria-label": item.type === "folder" ? "Delete folder; keep its tabs" : "Delete divider",
+          onClick: () => {
+            setActionEditor(null);
+            remove(id);
+          },
+          children: [
+            /* @__PURE__ */ u3(Icon, {
+              name: "trash"
+            }),
+            /* @__PURE__ */ u3("span", {
+              children: [
+                "Delete ",
+                item.type
+              ]
+            })
+          ]
+        })
+      ]
+    });
+  };
+  const leaf = (ref, index, parent) => {
+    const id = referenceId(ref), liveId = ref.key ? getHost()?.resolve(ref.key) : ref.tabId;
+    const tab = tabs.find((tab) => tab.id === liveId);
+    return /* @__PURE__ */ u3("div", {
+      class: `canvas-organization-leaf${parent ? " canvas-organization-child" : ""}`,
+      "data-organization-ref": id,
+      "data-organization-parent": parent,
+      "data-organization-index": index,
+      onDragOver: (e) => dragOver(e),
+      onDrop: (e) => drop(e, index, parent),
+      children: [
+        dragHandle(id),
+        /* @__PURE__ */ u3("div", {
+          class: "canvas-organization-existing-row",
+          children: tab ? renderTab(tab, index, side) : /* @__PURE__ */ u3("div", {
+            class: "canvas-configure-tabs-row row-hidden",
+            children: /* @__PURE__ */ u3("div", {
+              class: "canvas-configure-tabs-row-info",
+              children: /* @__PURE__ */ u3("div", {
+                class: "canvas-configure-tabs-copy",
+                children: [
+                  /* @__PURE__ */ u3("span", {
+                    class: "canvas-configure-tabs-row-title",
+                    children: ref.key?.split("/").pop() ?? ref.tabId
+                  }),
+                  /* @__PURE__ */ u3("p", {
+                    class: "canvas-configure-tabs-row-description",
+                    children: "Currently unavailable"
+                  })
+                ]
+              })
+            })
+          })
+        }),
+        more(id, tab?.title ?? "unavailable tab"),
+        actions(id, index, parent)
+      ]
+    }, id);
+  };
+  const creation = /* @__PURE__ */ u3("div", {
+    class: "canvas-organization-create",
+    role: "group",
+    "aria-label": `Add to ${side === "primary" ? "main" : "second"} drawer`,
+    children: [
+      /* @__PURE__ */ u3("button", {
+        type: "button",
+        onClick: () => create("folder"),
+        children: [
+          /* @__PURE__ */ u3(Icon, {
+            name: "plus"
+          }),
+          "Folder"
+        ]
+      }),
+      /* @__PURE__ */ u3("button", {
+        type: "button",
+        onClick: () => create("divider"),
+        children: [
+          /* @__PURE__ */ u3(Icon, {
+            name: "plus"
+          }),
+          "Divider"
+        ]
+      })
+    ]
+  });
+  return /* @__PURE__ */ u3(S, {
+    children: [
+      props.renderHeader(creation),
+      /* @__PURE__ */ u3("div", {
+        class: "canvas-configure-tabs-list",
+        "data-side": side,
+        children: /* @__PURE__ */ u3("div", {
+          class: "canvas-organization-editor",
+          onKeyDown: (e) => {
+            if (e.key === "Escape") {
+              cleanDrag();
+              if (actionEditor || iconEditor) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+              if (actionEditor) {
+                document.querySelector(`[aria-controls="${CSS.escape(`canvas-organization-actions-${actionEditor}`)}"]`)?.focus();
+                setActionEditor(null);
+              }
+              if (iconEditor) {
+                document.querySelector(`[aria-controls="${CSS.escape(`canvas-organization-icons-${iconEditor}`)}"]`)?.focus();
+                setIconEditor(null);
+              }
+            }
+          },
+          children: [
+            !organization[side].length && /* @__PURE__ */ u3("div", {
+              class: "canvas-configure-tabs-empty",
+              children: "No tabs assigned"
+            }),
+            error && /* @__PURE__ */ u3("div", {
+              role: "alert",
+              class: "canvas-configure-tabs-error",
+              children: error
+            }),
+            organization[side].map((item, index) => {
+              if (item.type === "tab")
+                return leaf(item, index);
+              const id = itemId(item);
+              return /* @__PURE__ */ u3("div", {
+                class: "canvas-organization-container",
+                "data-organization-id": item.id,
+                children: [
+                  /* @__PURE__ */ u3("div", {
+                    class: `canvas-configure-tabs-row canvas-organization-row${item.type === "divider" ? " canvas-organization-divider-row" : ""}`,
+                    "data-organization-ref": id,
+                    "data-organization-index": index,
+                    onDragOver: (e) => dragOver(e, item.type === "folder" ? item.id : undefined),
+                    onDragLeave: () => {
+                      if (dwell.current)
+                        clearTimeout(dwell.current);
+                      dwell.current = null;
+                    },
+                    onDrop: (e) => {
+                      const box = e.currentTarget.getBoundingClientRect();
+                      const middle = (e.clientY - box.top) / box.height;
+                      drop(e, middle > 0.7 ? index + 1 : index, item.type === "folder" && middle >= 0.3 && middle <= 0.7 ? item.id : undefined);
+                    },
+                    children: [
+                      dragHandle(id),
+                      item.type === "folder" ? /* @__PURE__ */ u3(S, {
+                        children: [
+                          /* @__PURE__ */ u3("button", {
+                            type: "button",
+                            class: "canvas-organization-disclosure",
+                            "aria-label": `${expanded.has(item.id) ? "Collapse" : "Expand"} ${item.name}`,
+                            "aria-expanded": expanded.has(item.id),
+                            onClick: () => {
+                              const next = new Set(expanded);
+                              if (next.has(item.id))
+                                next.delete(item.id);
+                              else
+                                next.add(item.id);
+                              setExpanded(next);
+                            },
+                            children: /* @__PURE__ */ u3(Icon, {
+                              name: expanded.has(item.id) ? "down" : "right"
+                            })
+                          }),
+                          /* @__PURE__ */ u3("button", {
+                            type: "button",
+                            class: "canvas-organization-icon",
+                            "aria-label": `Edit ${item.name} icon`,
+                            "aria-expanded": iconEditor === item.id,
+                            "aria-controls": `canvas-organization-icons-${item.id}`,
+                            onClick: () => setIconEditor(iconEditor === item.id ? null : item.id),
+                            dangerouslySetInnerHTML: { __html: folderIconSvg(item) }
+                          }),
+                          /* @__PURE__ */ u3(OrganizationName, {
+                            id: item.id,
+                            kind: "folder",
+                            value: item.name,
+                            onSave: (name) => update(id, { name })
+                          }),
+                          /* @__PURE__ */ u3("small", {
+                            class: "canvas-organization-count",
+                            "aria-label": `${item.children.length} tabs`,
+                            children: item.children.length
+                          })
+                        ]
+                      }) : /* @__PURE__ */ u3(S, {
+                        children: [
+                          /* @__PURE__ */ u3("span", {
+                            class: "canvas-tab-divider",
+                            "aria-hidden": "true"
+                          }),
+                          /* @__PURE__ */ u3(OrganizationName, {
+                            id: item.id,
+                            kind: "divider",
+                            value: item.label ?? "",
+                            onSave: (label) => update(id, { label })
+                          })
+                        ]
+                      }),
+                      more(id, item.type === "folder" ? item.name : item.label || "divider")
+                    ]
+                  }),
+                  actions(id, index, undefined, item),
+                  item.type === "folder" && iconEditor === item.id && /* @__PURE__ */ u3("div", {
+                    id: `canvas-organization-icons-${item.id}`,
+                    class: "canvas-organization-icons",
+                    role: "group",
+                    "aria-label": "Folder icon",
+                    children: [
+                      Object.keys(FOLDER_ICONS).map((icon) => /* @__PURE__ */ u3("button", {
+                        type: "button",
+                        title: icon,
+                        "aria-label": `${icon} icon`,
+                        "aria-pressed": !item.customIcon && (item.icon ?? "folder") === icon,
+                        onClick: () => update(id, { icon, customIcon: undefined }),
+                        dangerouslySetInnerHTML: { __html: folderIconSvg({ icon }) }
+                      }, icon)),
+                      /* @__PURE__ */ u3("textarea", {
+                        rows: 2,
+                        class: "canvas-organization-svg-paste",
+                        "aria-label": "Paste SVG icon",
+                        placeholder: "Paste an SVG icon…",
+                        onPaste: (event) => {
+                          event.preventDefault();
+                          try {
+                            update(id, { customIcon: parseCustomSvg(event.clipboardData?.getData("text") ?? "") });
+                            setError(null);
+                          } catch (err) {
+                            setError(err instanceof Error ? err.message : String(err));
+                          }
+                        }
+                      }),
+                      /* @__PURE__ */ u3("label", {
+                        class: "canvas-organization-import",
+                        children: [
+                          "Import SVG",
+                          /* @__PURE__ */ u3("input", {
+                            type: "file",
+                            accept: "image/svg+xml,.svg",
+                            onChange: async (e) => {
+                              const file = e.currentTarget.files?.[0];
+                              if (!file)
+                                return;
+                              const generation = currentLifecycleGeneration();
+                              try {
+                                if (file.size > 32768)
+                                  throw new Error("SVG must be smaller than 32 KB.");
+                                const text = await file.text();
+                                if (!isLifecycleCurrent(generation) || latestOrganization.current !== organization)
+                                  return;
+                                update(id, { customIcon: parseCustomSvg(text) });
+                                setError(null);
+                              } catch (err) {
+                                if (isLifecycleCurrent(generation) && latestOrganization.current === organization)
+                                  setError(err instanceof Error ? err.message : String(err));
+                              }
+                            }
+                          })
+                        ]
+                      })
+                    ]
+                  }),
+                  item.type === "folder" && expanded.has(item.id) && item.children.map((ref, childIndex) => leaf(ref, childIndex, item.id))
+                ]
+              }, id);
+            }),
+            /* @__PURE__ */ u3("div", {
+              class: "canvas-organization-end",
+              onDragOver: (e) => dragOver(e),
+              onDrop: (e) => drop(e, -1),
+              "aria-label": "End of drawer"
+            })
+          ]
+        })
+      })
+    ]
+  });
+}
+var ORGANIZATION_EDITOR_CSS = `
+  .canvas-organization-create { display:flex;flex-shrink:0;gap:2px; }
+  .canvas-organization-create button { display:inline-flex;align-items:center;gap:3px;min-height:24px;padding:3px 5px;border:0;border-radius:5px;background:transparent;color:var(--lumiverse-text-muted);font:inherit;font-size:calc(11px * var(--lumiverse-font-scale,1));white-space:nowrap;cursor:pointer; }
+  .canvas-organization-create svg { width:12px;height:12px; }
+  .canvas-organization-create button:hover,.canvas-organization-row button:hover,.canvas-organization-more:hover,.canvas-organization-action-panel button:hover { background:var(--lumiverse-primary-010);color:var(--lumiverse-text); }
+  .canvas-organization-editor { display:flex;flex-direction:column;gap:8px; }
+  .canvas-organization-container { display:flex;flex-direction:column;gap:6px;min-width:0; }
+  .canvas-organization-leaf { display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0;border:1px solid var(--lumiverse-border,#333);border-radius:14px;background:var(--lumiverse-bg-hover,var(--lumiverse-bg));padding:0 8px; }
+  .canvas-organization-leaf:has(.row-hidden) { background:transparent; }
+  .canvas-organization-existing-row .canvas-configure-tabs-row { background:transparent;border:0;padding-left:4px;padding-right:4px; }
+  .canvas-organization-existing-row { flex:1;min-width:0; }
+  .canvas-organization-existing-row .canvas-configure-tabs-drag-handle { display:none; }
+  .canvas-organization-child { margin-left:24px;border-left:2px solid var(--lumiverse-primary-020);padding-left:6px; }
+  .canvas-organization-more,.canvas-organization-row button,.canvas-organization-action-panel button { display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;gap:5px;min-width:28px;min-height:28px;border:0;border-radius:6px;padding:5px;color:var(--lumiverse-text-muted);background:transparent;font:inherit;font-size:calc(11px * var(--lumiverse-font-scale,1));cursor:pointer; }
+  .canvas-organization-more svg,.canvas-organization-row button svg,.canvas-organization-action-panel button svg { display:block;width:16px;height:16px; }
+  .canvas-organization-more[aria-expanded=true] { background:var(--lumiverse-primary-010);color:var(--lumiverse-primary); }
+  .canvas-organization-action-panel { display:flex;align-items:center;flex-wrap:wrap;gap:6px;width:100%;padding:6px 8px;border:1px solid var(--lumiverse-border);border-radius:8px;background:var(--lumiverse-bg); }
+  .canvas-organization-leaf > .canvas-organization-action-panel { margin:0 0 8px; }
+  .canvas-organization-row-actions { display:flex;gap:2px; }
+  .canvas-organization-destination { display:flex;align-items:center;gap:6px;flex:1;min-width:0;font-size:calc(11px * var(--lumiverse-font-scale,1));color:var(--lumiverse-text-muted); }
+  .canvas-organization-destination select { flex:1;width:0;min-width:70px;max-width:200px;min-height:28px;font:inherit;background:var(--lumiverse-bg);color:var(--lumiverse-text);border:1px solid var(--lumiverse-border);border-radius:6px;padding:4px; }
+  .canvas-organization-action-panel button:disabled { opacity:.3;cursor:default; }
+  .canvas-organization-action-panel button:disabled:hover { background:transparent;color:var(--lumiverse-text-muted); }
+  .canvas-organization-action-panel .canvas-organization-delete:hover { color:var(--lumiverse-error,var(--lumiverse-text)); }
+  .canvas-organization-row { gap:4px;align-items:center;min-height:50px;padding:8px; }
+  .canvas-organization-name { flex:1;width:0;min-width:48px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--lumiverse-text);font:inherit;font-size:calc(13px * var(--lumiverse-font-scale,1));padding:4px; }
+  .canvas-organization-name:hover { border-color:var(--lumiverse-border); }
+  .canvas-organization-name:focus { border-color:var(--lumiverse-primary);outline:none; }
+  .canvas-organization-count { min-width:20px;padding:2px 5px;border-radius:5px;background:var(--lumiverse-primary-008);color:var(--lumiverse-text-muted);font-size:calc(11px * var(--lumiverse-font-scale,1));text-align:center; }
+  .canvas-organization-row .canvas-organization-icon { width:30px;height:30px;border-radius:8px;background:var(--lumiverse-primary-010);color:var(--lumiverse-primary); }
+  .canvas-organization-icon svg { display:block;width:18px;height:18px; }
+  .canvas-organization-divider-row { min-height:40px;padding-top:5px;padding-bottom:5px;background:transparent; }
+  .canvas-organization-editor .canvas-organization-divider-row .canvas-tab-divider { width:24px;height:1px;margin:0 6px; }
+  .canvas-organization-icons { display:flex;flex-wrap:wrap;gap:4px;padding:8px 12px 8px 30px; }
+  .canvas-organization-icons button { display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:5px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--lumiverse-text-muted);cursor:pointer; }
+  .canvas-organization-icons button:hover { background:var(--lumiverse-primary-010); }
+  .canvas-organization-icons button svg { display:block;width:18px;height:18px; }
+  .canvas-organization-icons button[aria-pressed=true] { border-color:var(--lumiverse-primary);color:var(--lumiverse-primary); }
+  .canvas-organization-import { position:relative;font-size:calc(11px * var(--lumiverse-font-scale,1));padding:8px;border-radius:6px;color:var(--lumiverse-text-muted);cursor:pointer; }
+  .canvas-organization-import input { position:absolute;width:1px;height:1px;opacity:0;overflow:hidden; }
+  .canvas-organization-svg-paste { width:100%;font:inherit;font-size:calc(11px * var(--lumiverse-font-scale,1));color:var(--lumiverse-text);background:var(--lumiverse-bg);border:1px solid var(--lumiverse-border);border-radius:6px;padding:6px;resize:vertical; }
+  .canvas-organization-create button:focus-visible,.canvas-organization-more:focus-visible,.canvas-organization-row button:focus-visible,.canvas-organization-action-panel button:focus-visible,.canvas-organization-icons button:focus-visible,.canvas-organization-import:focus-within { outline:2px solid var(--lumiverse-primary);outline-offset:1px; }
+  .canvas-organization-end { min-height:16px; }
+  @media(max-width:500px) { .canvas-organization-child { margin-left:12px; } }
+  @media(pointer:coarse) { .canvas-organization-create button { min-height:32px; } .canvas-organization-more,.canvas-organization-row button,.canvas-organization-action-panel button { min-width:32px;min-height:32px; } }
+`;
+var init_configure_organization = __esm(() => {
+  init_hooks_module();
+  init_state();
+  init_dispatch();
+  init_folder_icons();
+  init_jsxRuntime_module();
+});
+
 // src/tabs/core-tabs.ts
 function isCoreTabId(id) {
   return CORE_HIDE_LOCKED.has(id);
@@ -4483,11 +5416,9 @@ var init_configure_catalog = __esm(() => {
     "cortex",
     "databank",
     "create",
-    "ooc",
     "prompt",
     "council",
     "summary",
-    "feedback",
     "worldinfo",
     "imagegen",
     "wallpaper",
@@ -4499,7 +5430,7 @@ var init_configure_catalog = __esm(() => {
   BUILTIN_TAB_TITLES = {
     profile: "Profile",
     presets: "Reasoning",
-    loom: "Loom",
+    loom: "Presets",
     weaver: "Weaver",
     connections: "Connections",
     browser: "Pack Browser",
@@ -4568,6 +5499,11 @@ function liveIdForKey(key, tabs) {
     });
     if (idMatch)
       return idMatch.id;
+    if (builtinId === "ooc" || builtinId === "feedback") {
+      const council = tabs.find((t) => t.id === "council");
+      if (council)
+        return council.id;
+    }
     const titleMatch = builtinId ? tabs.find((t) => t.title === builtinId) : undefined;
     if (titleMatch)
       return titleMatch.id;
@@ -4586,6 +5522,11 @@ function keyForLiveId(id, tabs) {
   let match = tabs.find((t) => t.id === id);
   if (match)
     return match.key ?? null;
+  if (id === "ooc" || id === "feedback") {
+    const council = tabs.find((t) => t.id === "council");
+    if (council)
+      return council.key ?? null;
+  }
   const idBase = id.includes(":") ? id.slice(0, id.lastIndexOf(":")) : id;
   match = tabs.find((t) => {
     const tBase = t.id.includes(":") ? t.id.slice(0, t.id.lastIndexOf(":")) : t.id;
@@ -4711,6 +5652,7 @@ function baseSnapshotFromDraft(draft) {
     assignments.set(id, "secondary");
   }
   return {
+    ...draft.organization ? { organizationFingerprint: JSON.stringify(draft.organization) } : {},
     tabOrder: encodeHostTabOrder(draft),
     hiddenTabIds: [...draft.hiddenIds],
     drawerSide: draft.drawerSide,
@@ -4723,6 +5665,8 @@ function rebaseBaseIfEpochUnchanged(draftToCommit, epochAtStart, currentEpoch) {
   return baseSnapshotFromDraft(draftToCommit);
 }
 function isDraftDirty(draft, base) {
+  if (JSON.stringify(draft.organization) !== base.organizationFingerprint)
+    return true;
   const order = encodeHostTabOrder(draft);
   if (order.length !== base.tabOrder.length)
     return true;
@@ -4917,11 +5861,9 @@ var init_builtin_icons = __esm(() => {
     cortex: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></svg>`,
     databank: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>`,
     create: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15.707 21.293a1 1 0 0 1-1.414 0l-1.586-1.586a1 1 0 0 1 0-1.414l5.586-5.586a1 1 0 0 1 1.414 0l1.586 1.586a1 1 0 0 1 0 1.414z"/><path d="m18 13-1.375-6.874a1 1 0 0 0-.746-.776L3.235 2.028a1 1 0 0 0-1.207 1.207L5.35 15.879a1 1 0 0 0 .776.746L13 18"/><path d="m2.3 2.3 7.286 7.286"/><circle cx="11" cy="11" r="2"/></svg>`,
-    ooc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>`,
     prompt: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`,
     council: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M8 21v-1a2 2 0 0 1 2 -2h4a2 2 0 0 1 2 2v1"/><path d="M15 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M17 10h2a2 2 0 0 1 2 2v1"/><path d="M5 5a2 2 0 1 0 4 0a2 2 0 0 0 -4 0"/><path d="M3 13v-1a2 2 0 0 1 2 -2h2"/></svg>`,
     summary: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/></svg>`,
-    feedback: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="m10 7-3 3 3 3"/><path d="M17 13v-1a2 2 0 0 0-2-2H7"/></svg>`,
     worldinfo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>`,
     imagegen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>`,
     wallpaper: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="2"/><path d="m9 17 6.1-6.1a2 2 0 0 1 2.81.01L22 15V5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>`,
@@ -5206,6 +6148,84 @@ var init_mode_transition = __esm(() => {
   _drawerChain = Promise.resolve();
 });
 
+// src/tabs/host-navigation.ts
+function leaveNativeFolderBrowser() {
+  const layout = getHostDrawerSettings()?.layout;
+  if (!Array.isArray(layout))
+    return;
+  const ids = new Set(layout.filter((item) => item?.type === "folder").map((item) => item.id));
+  const sidebar = getMainSidebar();
+  if (!sidebar)
+    return;
+  let fiber = getFiberFromElement(sidebar);
+  while (fiber) {
+    let hook = fiber.memoizedState;
+    for (let i = 0;hook && i < 60; i++, hook = hook.next) {
+      if (typeof hook.memoizedState === "string" && ids.has(hook.memoizedState) && typeof hook.queue?.dispatch === "function")
+        hook.queue.dispatch(null);
+    }
+    fiber = fiber.return;
+  }
+}
+function navigateHostTab(id, suppliedButton) {
+  internalNavigation++;
+  try {
+    leaveNativeFolderBrowser();
+    const button = suppliedButton ?? findMainTabButton(id);
+    if (button && button.getAttribute("aria-hidden") !== "true") {
+      button.click();
+      return true;
+    }
+    return callHostStoreAction("openDrawer", id);
+  } finally {
+    internalNavigation--;
+  }
+}
+function observeExplicitHostNavigation() {
+  const api = findHostStoreApi(), original = api?.getState?.()?.openDrawer;
+  if (!api?.setState || typeof original !== "function")
+    return () => {};
+  const generation = currentLifecycleGeneration();
+  const wrapped = function(...args) {
+    if (!internalNavigation && isLifecycleCurrent(generation) && typeof args[0] === "string") {
+      const key = getHost()?.findKey(args[0]), model = getModel();
+      if (key && model) {
+        const side = model.secondary.includes(key) ? "secondary" : "primary";
+        if (model.folderBrowser?.[side])
+          dispatch({ t: "activate", key, side });
+      }
+    }
+    return original.apply(this, args);
+  };
+  const originalModal = api.getState?.()?.openModal;
+  const wrappedModal = function(...args) {
+    if (args[0] === "configureTabs" && isLifecycleCurrent(generation)) {
+      Promise.resolve().then(() => (init_configure_modal(), {})).then((module) => {
+        if (isLifecycleCurrent(generation))
+          openConfigureTabsModal();
+      });
+      return;
+    }
+    if (typeof originalModal === "function")
+      return originalModal.apply(this, args);
+  };
+  api.setState({ openDrawer: wrapped, ...typeof originalModal === "function" ? { openModal: wrappedModal } : {} });
+  return () => {
+    if (api.getState?.()?.openDrawer === wrapped)
+      api.setState?.({ openDrawer: original });
+    if (api.getState?.()?.openModal === wrappedModal)
+      api.setState?.({ openModal: originalModal });
+  };
+}
+var internalNavigation = 0;
+var init_host_navigation = __esm(() => {
+  init_store();
+  init_host_settings();
+  init_fiber();
+  init_dispatch();
+  init_buttons();
+});
+
 // src/os/start-strip-top-gate.ts
 function isStartAtStripTopGate() {
   try {
@@ -5270,7 +6290,7 @@ function closeWindowByLiveId(liveId) {
   if (!wasDisplayed) {
     return dispatchBatch([
       { t: "setClosed", key, closed: true },
-      ...hideOnClose ? [{ t: "setHidden", key, hidden: true }] : []
+      ...hideOnClose ? [{ t: "setHidden", key, hidden: true, origin: "close" }] : []
     ]);
   }
   if (model.drawers[side].open)
@@ -5278,7 +6298,7 @@ function closeWindowByLiveId(liveId) {
   const result = dispatchBatch([
     { t: "setClosed", key, closed: true },
     { t: "setDrawer", side, open: false },
-    ...hideOnClose ? [{ t: "setHidden", key, hidden: true }] : []
+    ...hideOnClose ? [{ t: "setHidden", key, hidden: true, origin: "close" }] : []
   ]);
   commandDrawerOpen(side, false);
   return result;
@@ -5310,7 +6330,7 @@ function launchEndVisibleIndex(side, mainDrawerSide, horizontal) {
   const physical = side === "primary" ? mainDrawerSide : mainDrawerSide === "left" ? "right" : "left";
   return physical === "right" ? 0 : -1;
 }
-function openWindowInDrawerByLiveId(liveId, side) {
+function openWindowInDrawerByLiveId(liveId, side, preservePosition = false) {
   if (!isOsModeEnabled())
     return Promise.resolve();
   const host = getHost();
@@ -5323,14 +6343,14 @@ function openWindowInDrawerByLiveId(liveId, side) {
   const isClosed = model.closed.includes(key);
   const isHidden = model.hidden.includes(key);
   const livesInTarget = side === "primary" ? model.primary.includes(key) : model.secondary.includes(key);
-  const placeAtEnd = !livesInTarget || isClosed || isHidden;
+  const placeAtEnd = !livesInTarget || !preservePosition && (isClosed || isHidden);
   const launchIndex = placeAtEnd ? launchEndVisibleIndex(side, model.side, isHorizontalStrip()) : -1;
   const movingOutOfSecondary = !livesInTarget && side === "primary";
   const secondaryCapture = movingOutOfSecondary ? Promise.resolve().then(() => (init_dispatch(), {})).then((m) => captureSecondaryNeighborForMove(liveId)) : Promise.resolve({ neighborBtn: null });
   const mainChrome = side === "secondary" ? captureMainMirrorMoveChrome(liveId, side) : Promise.resolve(null);
   const unhide = isHidden ? dispatchBatch([
     { t: "setHidden", key, hidden: false },
-    ...livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : []
+    ...livesInTarget && !preservePosition ? [{ t: "reorder", key, side, index: launchIndex }] : []
   ]) : Promise.resolve();
   const drawerClosed = !model.drawers[side].open;
   const openDrawer = drawerClosed ? dispatch({ t: "setDrawer", side, open: true }) : Promise.resolve();
@@ -5352,7 +6372,7 @@ function openWindowInDrawerByLiveId(liveId, side) {
     }
   }).then(() => dispatchBatch([
     { t: "setClosed", key, closed: false },
-    ...isClosed && !isHidden && livesInTarget ? [{ t: "reorder", key, side, index: launchIndex }] : [],
+    ...isClosed && !isHidden && livesInTarget && !preservePosition ? [{ t: "reorder", key, side, index: launchIndex }] : [],
     { t: "activate", key, side }
   ])).then(() => {
     if (!movingOutOfSecondary)
@@ -5384,6 +6404,13 @@ function toggleWindowByLiveId(liveId, side) {
   }
   const displayed = model.drawers[side].open && model.active[side] === key;
   return displayed ? minimizeWindowByLiveId(liveId, side) : openWindowInDrawerByLiveId(liveId, side);
+}
+function openWindowInOwningDrawerByLiveId(liveId) {
+  const host = getHost(), model = getModel(), key = host?.findKey(liveId);
+  if (!model || !key)
+    return Promise.resolve();
+  const side = model.secondary.includes(key) ? "secondary" : "primary";
+  return openWindowInDrawerByLiveId(liveId, side, true);
 }
 var init_actions = __esm(() => {
   init_dispatch();
@@ -6136,6 +7163,7 @@ function resolveEntryIcon(tab, liveId) {
 }
 function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {}) {
   const manageMode = opts.manageMode ?? false;
+  const builtinTitles = new Map(getBuiltinCatalog().map((tab) => [tab.id, tab.title]));
   const tabsById = new Map(tabs.map((t) => [t.id, t]));
   const seen = new Set;
   const out = [];
@@ -6157,7 +7185,7 @@ function deriveStartMenuEntries(model, resolve, tabs = getDrawerTabs(), opts = {
       out.push({
         liveId,
         side,
-        title: tab?.title ?? key,
+        title: tab?.title ?? (coreId ? builtinTitles.get(coreId) : undefined) ?? key,
         iconSvg: icon.svg,
         iconUrl: icon.url,
         state,
@@ -6204,7 +7232,7 @@ function createMenuEntry(entry, targetSide) {
   item.append(rail, tile, label, status);
   item.addEventListener("click", () => {
     hideStartMenu();
-    openWindowInDrawerByLiveId(entry.liveId, targetSide);
+    Promise.resolve().then(() => (init_actions(), {})).then((m) => openWindowInOwningDrawerByLiveId(entry.liveId));
   });
   return item;
 }
@@ -6341,9 +7369,78 @@ function buildMenu(targetSide) {
   const list = document.createElement("div");
   list.className = "canvas-os-start-menu__list";
   list.setAttribute("role", "presentation");
-  for (const entry of entries) {
-    list.appendChild(_manageMode ? createManageRow(entry, targetSide, refreshCount) : createMenuEntry(entry, targetSide));
-  }
+  const row = (entry) => _manageMode ? createManageRow(entry, targetSide, refreshCount) : createMenuEntry(entry, targetSide);
+  if (model.organization) {
+    const byKey = new Map(entries.map((entry) => [entry.key, entry]));
+    for (const side of ["primary", "secondary"]) {
+      const section = document.createElement("div");
+      section.className = "canvas-os-start-menu__organization";
+      if (model.secondary.length) {
+        const label = document.createElement("span");
+        label.className = "canvas-os-start-menu__drawer-label";
+        label.textContent = side === "primary" ? "Main drawer" : "Second drawer";
+        section.appendChild(label);
+      }
+      for (const item of organizationFor(model)[side]) {
+        if (item.type === "tab") {
+          const entry = item.key ? byKey.get(item.key) : null;
+          if (entry)
+            section.appendChild(row(entry));
+          continue;
+        }
+        if (item.type === "divider") {
+          const separator = document.createElement("div");
+          separator.className = "canvas-os-start-menu__divider";
+          separator.title = item.label ?? "";
+          separator.setAttribute("role", "separator");
+          section.appendChild(separator);
+          continue;
+        }
+        const children = item.children.flatMap((ref) => ref.key && byKey.has(ref.key) ? [byKey.get(ref.key)] : []);
+        if (!children.length)
+          continue;
+        const group = document.createElement("div");
+        group.className = "canvas-os-start-menu__folder-group";
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "canvas-os-start-menu__folder";
+        toggle.setAttribute("role", "menuitem");
+        toggle.setAttribute("aria-expanded", "false");
+        const icon = document.createElement("span");
+        icon.innerHTML = folderIconSvg(item);
+        const name = document.createElement("span");
+        name.textContent = item.name;
+        const arrow = document.createElement("span");
+        arrow.textContent = "›";
+        arrow.setAttribute("aria-hidden", "true");
+        toggle.append(icon, name, arrow);
+        const content = document.createElement("div");
+        content.className = "canvas-os-start-menu__folder-children";
+        content.hidden = true;
+        content.setAttribute("role", "group");
+        content.setAttribute("aria-label", item.name);
+        for (const entry of children)
+          content.appendChild(row(entry));
+        toggle.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          content.hidden = !content.hidden;
+          toggle.setAttribute("aria-expanded", String(!content.hidden));
+          arrow.textContent = content.hidden ? "›" : "⌄";
+        });
+        toggle.addEventListener("keydown", (event) => {
+          if (event.key === "ArrowRight" && content.hidden || event.key === "ArrowLeft" && !content.hidden) {
+            event.preventDefault();
+            toggle.click();
+          }
+        });
+        group.append(toggle, content);
+        section.appendChild(group);
+      }
+      list.appendChild(section);
+    }
+  } else
+    for (const entry of entries)
+      list.appendChild(row(entry));
   menu.appendChild(list);
   return menu;
 }
@@ -6534,7 +7631,7 @@ function attachMenuDismiss() {
       return;
     if (!_menu)
       return;
-    const items = Array.from(_menu.querySelectorAll('[role="menuitem"]'));
+    const items = Array.from(_menu.querySelectorAll('[role="menuitem"]')).filter((item) => !item.closest?.("[hidden]"));
     if (items.length === 0)
       return;
     const idx = items.indexOf(document.activeElement);
@@ -6715,14 +7812,15 @@ function teardownStartMenu() {
 }
 var START_ATTR2 = "data-canvas-os-start", START_SIDE_ATTR = "data-canvas-start-side", MENU_ID = "canvas-os-start-menu", TAB_LIST_BOTTOM_CLASS2 = "sidebar-ux-tab-list-bottom", _menu = null, _menuOpenFor = null, _menuButton = null, _menuRaf = 0, _menuAnim = null, _menuRevealed = false, _closing = null, _buttonRaf = 0, _unsubDocListeners = null, _manageMode = false, STATE_LABEL, STATE_VERB, STATE_MARK_SVG, MANAGE_EYE_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.8"/></svg>', START_GLYPH_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="5" r="1.8"/><circle cx="12" cy="5" r="1.8"/><circle cx="19" cy="5" r="1.8"/><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/><circle cx="5" cy="19" r="1.8"/><circle cx="12" cy="19" r="1.8"/><circle cx="19" cy="19" r="1.8"/></svg>', _onShellCreated = null;
 var init_start_menu = __esm(() => {
+  init_folder_icons();
   init_dispatch();
   init_store();
   init_state();
   init_start_strip_top_gate();
-  init_actions();
   init_secondary();
   init_drawer_shell();
   init_styles();
+  init_configure_catalog();
   init_builtin_icons();
   init_core_tabs();
   init_start_menu_styles();
@@ -7148,13 +8246,13 @@ function renderMainMirrorTabs() {
   const wantedKeys = new Set(regularKeys);
   for (const btn of Array.from(list.querySelectorAll(`button.${MAIN_MIRROR_BTN_CLASS}`))) {
     const key = btn.getAttribute("data-mirror-key") || "";
-    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY) {
+    if (!wantedKeys.has(key) && key !== SETTINGS_MIRROR_KEY && btn.getAttribute("data-canvas-organization") == null) {
       btn.remove();
     }
   }
   for (const child of Array.from(mainSection.children)) {
     const el = child;
-    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS) && !(el.getAttribute?.("data-canvas-os-start") !== null && isStartAtStripTopGate())) {
+    if (!el.classList.contains(MAIN_MIRROR_BTN_CLASS) && el.getAttribute?.("data-canvas-organization") == null && !(el.getAttribute?.("data-canvas-os-start") !== null && isStartAtStripTopGate())) {
       mainSection.removeChild(el);
     }
   }
@@ -7245,7 +8343,7 @@ function onMirrorClick(ev) {
   }
   if (twin.btn && twin.btn.isConnected) {
     try {
-      twin.btn.click();
+      navigateHostTab(twin.liveId ?? mirror.getAttribute("data-tab-id") ?? "", twin.btn);
     } catch {}
   }
   const liveId = twin.liveId ?? mirror.getAttribute("data-tab-id") ?? null;
@@ -7336,6 +8434,7 @@ function teardownMainRenderer() {
 }
 var MAIN_MIRROR_LIST_CLASS = "sidebar-ux-main-tab-list-mirror", MAIN_MIRROR_BTN_CLASS = "sidebar-ux-main-tab-mirror-btn", MAIN_MIRROR_LIST_MAIN_CLASS = "sidebar-ux-tab-list-main", MAIN_MIRROR_LIST_BOTTOM_CLASS = "sidebar-ux-tab-list-bottom", SETTINGS_MIRROR_KEY = "__canvas-settings__", _unsubModelChanged2 = null, _unsubGhostPresentation = null, _renderRaf = null;
 var init_main_renderer = __esm(() => {
+  init_host_navigation();
   init_dispatch();
   init_state();
   init_start_strip_top_gate();
@@ -7507,7 +8606,10 @@ function activateMainMirrorFromRestore(hostBtn, title, opts) {
   const resolvedTitle = title || hostBtn?.getAttribute("title") || hostBtn?.getAttribute("aria-label") || undefined;
   if (hostBtn && hostBtn.isConnected) {
     try {
-      hostBtn.click();
+      if (hostBtn.getAttribute("aria-hidden") === "true")
+        navigateHostTab(hostBtn.getAttribute("data-tab-id") ?? "", hostBtn);
+      else
+        hostBtn.click();
     } catch {}
   }
   onMainMirrorTabActivated(resolvedTitle, opts);
@@ -7548,6 +8650,7 @@ function stopObservers() {
 }
 var initialState, _state;
 var init_main_tab_pin = __esm(() => {
+  init_host_navigation();
   init_store();
   init_state();
   init_mobile_exclusion();
@@ -8230,8 +9333,10 @@ async function mountExtensionRootFromMain(args) {
       const toggle = findMainDrawerToggle2();
       if (toggle)
         toggle.click();
-      else
-        targetButton.click();
+      else {
+        await Promise.resolve().then(() => init_host_navigation());
+        navigateHostTab(resolvedId, targetButton);
+      }
       await nextFrame();
     }
     const afterOpen = readHostMainDrawerState();
@@ -8245,7 +9350,8 @@ async function mountExtensionRootFromMain(args) {
           handoffId,
           wasTargetHidden
         }));
-        handoffButton.click();
+        await Promise.resolve().then(() => init_host_navigation());
+        navigateHostTab(handoffId, handoffButton);
         await nextFrame();
       } else {
         dwarn("[SecondaryDrawer] rootless selected extension has no main-tab handoff", {
@@ -8267,7 +9373,8 @@ async function mountExtensionRootFromMain(args) {
       if (liveTargetButton) {
         if (liveTargetButton.style.display === "none")
           liveTargetButton.style.display = "";
-        liveTargetButton.click();
+        await Promise.resolve().then(() => init_host_navigation());
+        navigateHostTab(resolvedId, liveTargetButton);
       }
     }
     dlog("[SecondaryDrawer] host state after selecting extension", JSON.stringify(readHostMainDrawerState()));
@@ -8870,6 +9977,7 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
   if (isModeSwitchBarrierActive()) {
     return { ok: false, error: "mode-switch-in-progress", superseded: true };
   }
+  const generation = currentLifecycleGeneration();
   const host = getHost();
   if (!host)
     return { ok: false, error: "Canvas tab model is not ready." };
@@ -8938,15 +10046,19 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
       }
     }
     for (const key of [...model.primary, ...model.secondary]) {
-      intents.push({ t: "setHidden", key, hidden: hidden.has(key) });
+      if (draft.organization && !host.findKey(host.resolve(key) ?? ""))
+        continue;
+      intents.push({ t: "setHidden", key, hidden: hidden.has(key), ...model.closeHidden?.includes(key) && model.hidden.includes(key) === hidden.has(key) ? { origin: "close" } : {} });
     }
     for (const key of model.closed) {
+      if (draft.organization && !host.findKey(host.resolve(key) ?? ""))
+        continue;
       if (model.hidden.includes(key) && !hidden.has(key)) {
         intents.push({ t: "setClosed", key, closed: false });
       }
     }
     if (commitBaseModel) {
-      const activeBeforeRebase = activeAtGestureStart ?? activeSelection(observedBeforeRebase);
+      const activeBeforeRebase = activeAtGestureStart ?? (draft.organization ? commitBaseModel.active : activeSelection(observedBeforeRebase));
       for (const source of ["primary", "secondary"]) {
         const active = activeBeforeRebase[source];
         if (!active || hidden.has(active))
@@ -9009,13 +10121,73 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
         }
       }
     }
+    if (draft.organization && plannedMoves.length && typeof document !== "undefined") {
+      const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
+      await Promise.resolve().then(() => init_secondary());
+      await Promise.resolve().then(() => init_buttons());
+      const placed = [];
+      setSuppressAutoActivation(true);
+      try {
+        for (const move of plannedMoves) {
+          if (!isLifecycleCurrent(generation))
+            throw new Error("Canvas was disabled during placement.");
+          const id = host.resolve(move.key);
+          if (!id)
+            continue;
+          placed.push(move);
+          if (move.to === "secondary") {
+            await assignToSecondary(id, { facadeKey: move.key, openOnClosed: false, setActiveWhenReady: false });
+            if (!getSecondaryWrapper()?.querySelector(`[data-canvas-moved="${cssEscape2(id)}"]`))
+              throw new Error(`Could not place ${id} in the second drawer.`);
+          } else {
+            await unassignFromSecondary(id);
+            if (getSecondaryWrapper()?.querySelector(`[data-canvas-moved="${cssEscape2(id)}"]`))
+              throw new Error(`Could not return ${id} to the main drawer.`);
+          }
+        }
+      } catch (error) {
+        for (const move of placed.reverse()) {
+          if (!isLifecycleCurrent(generation))
+            break;
+          const id = host.resolve(move.key);
+          if (!id)
+            continue;
+          try {
+            if (move.to === "secondary")
+              await unassignFromSecondary(id);
+            else
+              await assignToSecondary(id, { facadeKey: move.key, openOnClosed: false, setActiveWhenReady: false });
+          } catch {}
+        }
+        if (isLifecycleCurrent(generation))
+          for (const side of ["primary", "secondary"]) {
+            const key = model.active[side], id = key ? host.resolve(key) : null;
+            if (id) {
+              try {
+                await host.activate(side, id);
+              } catch {}
+            }
+          }
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      } finally {
+        setSuppressAutoActivation(false);
+      }
+      if (!isLifecycleCurrent(generation) || isModeSwitchBarrierActive())
+        return { ok: false, error: "mode-switch-in-progress", superseded: true };
+    }
+    if (draft.organization) {
+      intents.push({ t: "setOrganization", organization: draft.organization });
+      for (const move of plannedMoves)
+        if (model.active.primary === move.key || model.active.secondary === move.key)
+          intents.push({ t: "activate", key: move.key, side: move.to });
+    }
     await dispatchBatch(intents);
     const committed = getModel();
     dlog("[owned-commit] committed", {
       primary: committed?.primary,
       secondary: committed?.secondary
     });
-    if (plannedMoves.length > 0 && typeof document !== "undefined") {
+    if (!draft.organization && plannedMoves.length > 0 && typeof document !== "undefined") {
       try {
         const drawer = await Promise.resolve().then(() => (init_secondary_drawer(), {}));
         setSuppressAutoActivation(true);
@@ -9083,7 +10255,29 @@ async function commitDraftToOwnedModel(draft, activeAtGestureStart, opts) {
         dwarn("[owned-commit] placement pass failed:", err);
       }
     }
-    if (!opts?.skipChrome) {
+    if (draft.organization) {
+      if (!isLifecycleCurrent(generation))
+        return { ok: false, error: "Canvas was disabled during the edit.", superseded: true };
+      const next = getModel();
+      await Promise.resolve();
+      if (!isLifecycleCurrent(generation))
+        return { ok: false, error: "Canvas was disabled during the edit.", superseded: true };
+      for (const side of ["primary", "secondary"]) {
+        if (next?.folderBrowser?.[side]) {
+          if (next.drawers[side].open)
+            commandDrawerOpen(side, true);
+          continue;
+        }
+        const key = next?.active[side], id = key ? host.resolve(key) : null;
+        if (id && (plannedMoves.length || model.folderBrowser?.[side])) {
+          await host.activate(side, id);
+          if (!isLifecycleCurrent(generation))
+            return { ok: false, error: "Canvas was disabled during the edit.", superseded: true };
+          if (next?.drawers[side].open)
+            commandDrawerOpen(side, true);
+        }
+      }
+    } else if (!opts?.skipChrome) {
       for (const move of plannedMoves) {
         const liveId = host.resolve(move.key);
         if (!liveId)
@@ -9133,7 +10327,7 @@ function readVisibleTabIdsFromList(list) {
   for (const el of Array.from(list.querySelectorAll('button[data-tab-id], button.sidebar-ux-main-tab-mirror-btn, button[class*="tabBtnExtension"]'))) {
     if (isSettingsButton(el))
       continue;
-    if (el.style?.display === "none")
+    if (el.style?.display === "none" || el.getAttribute("aria-hidden") === "true" || el.hasAttribute?.("data-canvas-folder-member"))
       continue;
     const hasAttr = el.getAttribute("data-tab-id") !== null;
     const id = buttonTabId(el);
@@ -9171,25 +10365,6 @@ var init_live_tab_order = __esm(() => {
   init_secondary();
   init_log();
   _titleResolvedLogged = new Set;
-});
-
-// node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js
-function u3(e, t, n, o, i, u) {
-  t || (t = {});
-  var a, c, p = t;
-  if ("ref" in p)
-    for (c in p = {}, t)
-      c == "ref" ? a = t[c] : p[c] = t[c];
-  var l2 = { type: e, props: p, key: n, ref: a, __k: null, __: null, __b: 0, __e: null, __c: null, constructor: undefined, __v: --f3, __i: -1, __u: 0, __source: i, __self: u };
-  if (typeof e == "function" && (a = e.defaultProps))
-    for (c in a)
-      p[c] === undefined && (p[c] = a[c]);
-  return l.vnode && l.vnode(l2), l2;
-}
-var f3 = 0;
-var init_jsxRuntime_module = __esm(() => {
-  init_preact_module();
-  init_preact_module();
 });
 
 // src/tabs/unhide-vanilla.ts
@@ -9743,6 +10918,17 @@ function buildModelFromLayout(layout, findKey, side) {
       appendOnce(secondary, key);
     }
   }
+  const organization = layout.organization ? sanitizeOrganization(layout.organization) : undefined;
+  if (organization) {
+    for (const side of ["primary", "secondary"])
+      for (const ref of references(organization[side])) {
+        if (!ref.key)
+          continue;
+        const key = resolveStoredId(ref.key, findKey) ?? ref.key;
+        if (key)
+          appendOnce(side === "primary" ? primary : secondary, key);
+      }
+  }
   const hidden = [];
   for (const storedId of layout.hiddenTabIds ?? []) {
     const key = resolveStoredId(storedId, findKey);
@@ -9764,6 +10950,13 @@ function buildModelFromLayout(layout, findKey, side) {
       closed.push(key);
     }
   }
+  for (const [field, target] of [["hidden", hidden], ["menuHidden", menuHidden], ["closed", closed]]) {
+    for (const stored of layout.leafState?.[field] ?? []) {
+      const key = resolveStoredId(stored, findKey) ?? stored;
+      if ((primary.includes(key) || secondary.includes(key)) && !target.includes(key))
+        target.push(key);
+    }
+  }
   const activePrimaryCandidate = layout.primary?.tabId ? resolveStoredId(layout.primary.tabId, findKey) : null;
   const activeSecondaryCandidate = layout.secondary?.activeTabId ? resolveStoredId(layout.secondary.activeTabId, findKey) : null;
   const activePrimary = activePrimaryCandidate && primary.includes(activePrimaryCandidate) && !hidden.includes(activePrimaryCandidate) && !closed.includes(activePrimaryCandidate) ? activePrimaryCandidate : null;
@@ -9772,7 +10965,19 @@ function buildModelFromLayout(layout, findKey, side) {
   const primaryWidth = layout.primary?.width ?? 420;
   const secondaryOpen = layout.secondary?.open ?? false;
   const secondaryWidth = layout.secondary?.width ?? 420;
-  return {
+  const restored = {
+    ...organization ? { organization } : {},
+    ...layout.folderBrowser ? { folderBrowser: layout.folderBrowser } : {},
+    ...layout.rememberedLeaf ? { rememberedLeaf: Object.fromEntries(["primary", "secondary"].map((side) => {
+      const key = layout.rememberedLeaf?.[side];
+      return [side, key ? resolveStoredId(key, findKey) ?? key : null];
+    })) } : {},
+    closeHidden: layout.closeHidden ? layout.closeHidden.map((key) => resolveStoredId(key, findKey) ?? key).filter((key) => hidden.includes(key)) : hidden.filter((key) => closed.includes(key)),
+    ...layout.nativeAddresses ? { nativeAddresses: layout.nativeAddresses } : {},
+    ...layout.nativeOrganizationBaseline ? { nativeOrganizationBaseline: layout.nativeOrganizationBaseline } : {}
+  };
+  let result = {
+    ...restored,
     version: 2,
     primary,
     secondary,
@@ -9789,10 +10994,29 @@ function buildModelFromLayout(layout, findKey, side) {
     },
     side: layout.drawerSide ?? side ?? "left"
   };
+  if (result.organization)
+    result = { ...result, organization: normalizeOrganization(result) };
+  const selected = { ...result.folderBrowser ?? { primary: null, secondary: null } };
+  for (const side of ["primary", "secondary"]) {
+    if (!selected[side])
+      continue;
+    if (folderFor(result, side, selected[side]))
+      result = { ...result, active: { ...result.active, [side]: null } };
+    else {
+      selected[side] = null;
+      const remembered = result.rememberedLeaf?.[side];
+      const fallback = remembered && result[side].includes(remembered) && !hidden.includes(remembered) && !closed.includes(remembered) ? remembered : result[side].find((key) => !hidden.includes(key) && !closed.includes(key)) ?? null;
+      result = { ...result, active: { ...result.active, [side]: fallback } };
+    }
+  }
+  if (layout.folderBrowser)
+    result = { ...result, folderBrowser: selected };
+  return result;
 }
 function serializeModelToSingleLayout(model, resolve, version) {
   return {
     version,
+    ...organizationFields(model, resolve),
     primary: {
       open: model.drawers.primary.open,
       width: model.drawers.primary.width,
@@ -9800,6 +11024,7 @@ function serializeModelToSingleLayout(model, resolve, version) {
     },
     secondary: { open: false, width: 420, activeTabId: undefined },
     detachedTabs: [],
+    ...model.organization ? { organization: { version: 1, primary: [...organizationFor(model).primary, ...organizationFor(model).secondary], secondary: [] }, folderBrowser: { primary: model.folderBrowser?.primary ?? model.folderBrowser?.secondary ?? null, secondary: null } } : {},
     tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
     hiddenTabIds: model.hidden.map((key) => resolve(key)).filter(Boolean),
     menuHiddenTabIds: model.menuHidden.map((key) => resolve(key)).filter(Boolean),
@@ -9817,6 +11042,7 @@ function foldLayoutToSingleShape(layout) {
   }
   return {
     ...layout,
+    ...layout.organization ? { organization: { version: 1, primary: [...layout.organization.primary, ...layout.organization.secondary], secondary: [] }, folderBrowser: { primary: layout.folderBrowser?.primary ?? layout.folderBrowser?.secondary ?? null, secondary: null } } : {},
     secondary: { open: false, width: 420, activeTabId: undefined },
     detachedTabs: [],
     tabOrder: order
@@ -9875,6 +11101,7 @@ function serializeModelToLayout(model, resolve, version) {
   const hiddenTabIds = model.hidden.map((key) => resolve(key)).filter(Boolean);
   return {
     version,
+    ...organizationFields(model, resolve),
     primary: {
       open: model.drawers.primary.open,
       width: model.drawers.primary.width,
@@ -9895,6 +11122,21 @@ function serializeModelToLayout(model, resolve, version) {
 }
 function resolveList(keys, resolve) {
   return keys.map((key) => resolve(key)).filter(Boolean);
+}
+function organizationFields(model, resolve) {
+  const nativeAddresses = { ...model.nativeAddresses };
+  for (const key of [...model.primary, ...model.secondary]) {
+    const id = resolve(key);
+    if (id)
+      nativeAddresses[key] = id;
+  }
+  return {
+    ...model.organization ? { nativeOrganizationProjection: JSON.stringify(projectNativeOrganization(normalizeOrganization(model), (key) => resolve(key) ?? nativeAddresses[key] ?? null)), nativeAddresses, organization: normalizeOrganization(model), leafState: { hidden: model.hidden, menuHidden: model.menuHidden, closed: model.closed } } : {},
+    ...model.folderBrowser ? { folderBrowser: model.folderBrowser } : {},
+    ...model.rememberedLeaf ? { rememberedLeaf: model.rememberedLeaf } : {},
+    ...model.closeHidden ? { closeHidden: model.closeHidden } : {},
+    ...model.nativeOrganizationBaseline ? { nativeOrganizationBaseline: model.nativeOrganizationBaseline } : {}
+  };
 }
 var init_layout_model = () => {};
 
@@ -11318,6 +12560,8 @@ function installDragOnButton(btn) {
   const onPointerDown = (e) => {
     if (!_active2)
       return;
+    if (getModel()?.organization)
+      return;
     if (!isLiveTabListDndAllowed())
       return;
     if (e.button !== 0)
@@ -11453,6 +12697,7 @@ var init_tab_list_dnd = __esm(() => {
   init_secondary();
   init_buttons();
   init_mobile_exclusion();
+  init_dispatch();
   init_handles();
   init_log();
   init_live_tab_order();
@@ -12296,7 +13541,15 @@ function injectModalStyles() {
       flex-direction: column;
       gap: 4px;
     }
+    .canvas-configure-tabs-section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+    }
     .canvas-configure-tabs-section-title {
+      min-width: 0;
       margin: 0;
       font-size: calc(12px * var(--lumiverse-font-scale, 1));
       font-weight: 700;
@@ -12651,6 +13904,7 @@ function injectModalStyles() {
       }
     }
   `;
+  style.textContent += ORGANIZATION_EDITOR_CSS;
   document.head.appendChild(style);
 }
 function detachDragListeners() {
@@ -12731,6 +13985,7 @@ function animateOverlaySettle2(destLeft, destTop) {
 }
 function cloneConfigureDraft(d) {
   return {
+    ...d.organization ? { organization: d.organization } : {},
     drawerSide: d.drawerSide,
     primaryIds: [...d.primaryIds],
     secondaryIds: [...d.secondaryIds],
@@ -13056,7 +14311,7 @@ function ConfigureTabsModalInner(props) {
   cancelRef.current = onCancel;
   y2(() => {
     const handler = (e) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !e.defaultPrevented) {
         if (_dragActive || _dragTabId) {
           cancelDrag({ revertDraft: !_settling });
           return;
@@ -13269,12 +14524,18 @@ function ConfigureTabsModalInner(props) {
   };
   const primaryDesc = leftIsSecondaryVal ? "Tabs shown in the right sidebar drawer." : "Tabs shown in the left sidebar drawer.";
   const secondaryDesc = leftIsSecondaryVal ? "Tabs shown in the left sidebar drawer." : "Tabs shown in the right sidebar drawer.";
-  const renderColumnHeader = (title, desc) => /* @__PURE__ */ u3("div", {
+  const renderColumnHeader = (title, desc, actions) => /* @__PURE__ */ u3("div", {
     class: "canvas-configure-tabs-section-header",
     children: [
-      /* @__PURE__ */ u3("h3", {
-        class: "canvas-configure-tabs-section-title",
-        children: title
+      /* @__PURE__ */ u3("div", {
+        class: "canvas-configure-tabs-section-heading",
+        children: [
+          /* @__PURE__ */ u3("h3", {
+            class: "canvas-configure-tabs-section-title",
+            children: title
+          }),
+          actions
+        ]
       }),
       /* @__PURE__ */ u3("p", {
         class: "canvas-configure-tabs-section-desc",
@@ -13282,22 +14543,42 @@ function ConfigureTabsModalInner(props) {
       })
     ]
   });
-  const renderColumn = (tabs, side, sectionHeader) => /* @__PURE__ */ u3("div", {
+  const renderColumn = (tabs, side, title, desc) => /* @__PURE__ */ u3("div", {
     class: "canvas-configure-tabs-column",
-    children: [
-      sectionHeader,
-      /* @__PURE__ */ u3("div", {
-        class: "canvas-configure-tabs-list",
-        "data-side": side,
-        children: tabs.length === 0 ? /* @__PURE__ */ u3("div", {
-          class: "canvas-configure-tabs-empty",
-          children: "No tabs assigned"
-        }) : tabs.map((tab, i) => renderTabRow(tab, i, side))
-      })
-    ]
+    children: draft.organization ? /* @__PURE__ */ u3(ConfigureOrganization, {
+      organization: draft.organization,
+      side,
+      tabs: catalog,
+      renderTab: renderTabRow,
+      renderHeader: (actions) => renderColumnHeader(title, desc, actions),
+      onChange: (organization) => {
+        if (!_draftRef)
+          return;
+        const host = getHost();
+        const ids = (side) => references(organization[side]).flatMap((ref) => ref.key && host?.resolve(ref.key) && host.findKey(host.resolve(ref.key)) ? [host.resolve(ref.key)] : []);
+        const primaryIds = ids("primary"), secondaryIds = ids("secondary");
+        const allIds = [...primaryIds, ...secondaryIds];
+        const next = { ..._draftRef, organization, primaryIds, secondaryIds, builtinOrder: allIds.filter((id) => catalog.find((tab) => tab.id === id)?.kind === "builtin"), extensionOrder: allIds.filter((id) => catalog.find((tab) => tab.id === id)?.kind !== "builtin") };
+        _draftRef = next;
+        renderModal(next, _catalogRef, null, false);
+        autoCommit();
+      }
+    }) : /* @__PURE__ */ u3(S, {
+      children: [
+        renderColumnHeader(title, desc),
+        /* @__PURE__ */ u3("div", {
+          class: "canvas-configure-tabs-list",
+          "data-side": side,
+          children: tabs.length === 0 ? /* @__PURE__ */ u3("div", {
+            class: "canvas-configure-tabs-empty",
+            children: "No tabs assigned"
+          }) : tabs.map((tab, i) => renderTabRow(tab, i, side))
+        })
+      ]
+    })
   });
-  const leftColumn = renderColumn(leftIsSecondaryVal ? secondaryTabs : primaryTabs, leftIsSecondaryVal ? "secondary" : "primary", renderColumnHeader(leftIsSecondaryVal ? "Second Drawer Tabs" : "Main Drawer Tabs", leftIsSecondaryVal ? secondaryDesc : primaryDesc));
-  const rightColumn = renderColumn(leftIsSecondaryVal ? primaryTabs : secondaryTabs, leftIsSecondaryVal ? "primary" : "secondary", renderColumnHeader(leftIsSecondaryVal ? "Main Drawer Tabs" : "Second Drawer Tabs", leftIsSecondaryVal ? primaryDesc : secondaryDesc));
+  const leftColumn = renderColumn(leftIsSecondaryVal ? secondaryTabs : primaryTabs, leftIsSecondaryVal ? "secondary" : "primary", leftIsSecondaryVal ? "Second Drawer Tabs" : "Main Drawer Tabs", leftIsSecondaryVal ? secondaryDesc : primaryDesc);
+  const rightColumn = renderColumn(leftIsSecondaryVal ? primaryTabs : secondaryTabs, leftIsSecondaryVal ? "primary" : "secondary", leftIsSecondaryVal ? "Main Drawer Tabs" : "Second Drawer Tabs", leftIsSecondaryVal ? primaryDesc : secondaryDesc);
   return /* @__PURE__ */ u3("div", {
     class: "canvas-configure-tabs-overlay",
     onClick: (e) => {
@@ -13365,7 +14646,7 @@ function ConfigureTabsModalInner(props) {
           ]
         }) : /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-body canvas-configure-tabs-body--single",
-          children: renderColumn(primaryTabs, "primary", renderColumnHeader("Drawer Tabs", "Tabs in the sidebar drawer."))
+          children: renderColumn(primaryTabs, "primary", "Drawer Tabs", "Tabs in the sidebar drawer.")
         }),
         commitError && /* @__PURE__ */ u3("div", {
           class: "canvas-configure-tabs-error",
@@ -13446,7 +14727,7 @@ function buildLiveDraftAndBase() {
       const out = [];
       for (const key of keys) {
         const id = resolveId(key);
-        if (id)
+        if (id && (!model.organization || host.findKey(id)))
           out.push(id);
       }
       return out;
@@ -13461,7 +14742,7 @@ function buildLiveDraftAndBase() {
       drawerSide,
       assignments: currentAssignments
     });
-    const draft = alignDraftToLiveVisibleOrder(draftFromModel, readLivePrimaryTabIds(), readLiveSecondaryTabIds());
+    const draft = model.organization ? { ...draftFromModel, primaryIds: modelPrimaryIds, secondaryIds: modelSecondaryIds, organization: model.organization } : alignDraftToLiveVisibleOrder(draftFromModel, readLivePrimaryTabIds(), readLiveSecondaryTabIds());
     const base = baseSnapshotFromDraft(draft);
     dlog("[configure-modal] draft from model", {
       side: draft.drawerSide,
@@ -13493,11 +14774,13 @@ function buildLiveDraftAndBase() {
   });
   return { draft, base, catalog };
 }
-async function openConfigureTabsModal() {
+async function openConfigureTabsModal(focusItemId) {
   if (typeof document === "undefined")
     return;
   if (_openInProgress)
     return;
+  if (focusItemId)
+    setTimeout(() => document.dispatchEvent(new CustomEvent("canvas:configure-organization-focus", { detail: focusItemId })), 50);
   _openInProgress = true;
   try {
     if (getSettings().unhideVanillaTabs) {
@@ -13641,6 +14924,7 @@ function unmountModal() {
 }
 var _modalContainer = null, _openInProgress = false, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer2 = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
+  init_configure_organization();
   init_preact_module();
   init_hooks_module();
   init_configure_model();
@@ -13660,8 +14944,60 @@ var init_configure_modal = __esm(() => {
   _catalogRef = [];
 });
 
+// src/tabs/organization-actions.ts
+function commitOrganization(change) {
+  const generation = currentLifecycleGeneration();
+  const task = queue.then(async () => {
+    if (!isLifecycleCurrent(generation))
+      return;
+    const modal = await Promise.resolve().then(() => (init_configure_modal(), {}));
+    await flushConfigureCommits();
+    if (!isLifecycleCurrent(generation))
+      return;
+    const host = getHost(), model = getModel();
+    if (!host || !model)
+      return;
+    const organization = change(organizationFor(model));
+    const ids = (side) => references(organization[side]).flatMap((ref) => {
+      const id = ref.key ? host.resolve(ref.key) : null;
+      return id && host.findKey(id) ? [id] : [];
+    });
+    const primaryIds = ids("primary"), secondaryIds = ids("secondary");
+    const draft = createDraft({ catalog: getFullCatalog(), tabOrder: [...primaryIds, ...secondaryIds], drawerSide: model.side, hiddenTabIds: model.hidden.flatMap((key) => host.resolve(key) ? [host.resolve(key)] : []), assignments: new Map(secondaryIds.map((id) => [id, "secondary"])) });
+    const result = await commitDraftToOwnedModel({ ...draft, primaryIds, secondaryIds, organization }, model.active);
+    if (!isLifecycleCurrent(generation))
+      return;
+    if (!result.ok) {
+      if (result.superseded)
+        return;
+      throw new Error(result.error);
+    }
+    refreshConfigureDraftFromLive();
+  });
+  queue = task.catch(() => {});
+  return task;
+}
+function showOrganizationError(error) {
+  const notice = document.createElement("div");
+  notice.className = "canvas-organization-error";
+  notice.setAttribute("role", "alert");
+  notice.textContent = error instanceof Error ? error.message : String(error);
+  document.body.appendChild(notice);
+  setTimeout(() => notice.remove(), 6000);
+}
+var queue;
+var init_organization_actions = __esm(() => {
+  init_dispatch();
+  init_configure_model();
+  init_configure_catalog();
+  init_owned_commit();
+  queue = Promise.resolve();
+});
+
 // src/tabs/tab-context-menu.ts
 function hideAssignmentMenu() {
+  _organizationDismiss?.();
+  _organizationDismiss = null;
   if (_contextMenu) {
     _contextMenu.remove();
     _contextMenu = null;
@@ -13827,7 +15163,52 @@ function createAssignmentContextMenuItem(label, onClick, opts) {
   });
   return item;
 }
-var _showAssignmentMenuOverride = null, _contextMenu = null, _lastContextMenuTarget = null;
+function showOrganizationMenu(x, y, side, id, originatingTarget) {
+  hideAssignmentMenu();
+  _contextMenu = createAssignmentContextMenu();
+  document.body.appendChild(_contextMenu);
+  _contextMenu.appendChild(createAssignmentContextMenuItem("Configure tabs", () => {
+    Promise.resolve().then(() => (init_configure_modal(), {})).then((m) => openConfigureTabsModal(id.replace(/^(folder|divider):/, "")));
+  }));
+  if (getSettings().secondSidebarEnabled || side === "secondary")
+    _contextMenu.appendChild(createAssignmentContextMenuItem(side === "primary" ? "Move to second drawer" : "Move to main drawer", () => {
+      const model = getModel();
+      if (!model)
+        return;
+      Promise.resolve().then(() => (init_organization_actions(), {})).then((m) => commitOrganization((org) => relocateOrganizationItem(org, id, side === "primary" ? "secondary" : "primary"))).catch((error) => {
+        Promise.resolve().then(() => (init_organization_actions(), {})).then((m) => showOrganizationError(error));
+      });
+    }));
+  _contextMenu.style.left = `${Math.max(8, x)}px`;
+  _contextMenu.style.top = `${Math.max(8, y)}px`;
+  _contextMenu.style.display = "block";
+  _lastContextMenuTarget = originatingTarget ?? null;
+  const outside = (event) => {
+    if (_contextMenu?.contains(event.target))
+      return;
+    hideAssignmentMenu();
+  };
+  const escape = (event) => {
+    if (event.key === "Escape")
+      hideAssignmentMenu();
+  };
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", escape, true);
+  _organizationDismiss = () => {
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", escape, true);
+  };
+  requestAnimationFrame(() => {
+    if (!_contextMenu)
+      return;
+    const rect = _contextMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth)
+      _contextMenu.style.left = `${Math.max(8, window.innerWidth - rect.width - 8)}px`;
+    if (rect.bottom > window.innerHeight)
+      _contextMenu.style.top = `${Math.max(8, window.innerHeight - rect.height - 8)}px`;
+  });
+}
+var _showAssignmentMenuOverride = null, _contextMenu = null, _organizationDismiss = null, _lastContextMenuTarget = null;
 var init_tab_context_menu = __esm(() => {
   init_assignment();
   init_dispatch();
@@ -13835,6 +15216,647 @@ var init_tab_context_menu = __esm(() => {
   init_log();
   init_drawer_sync();
   init_host_settings();
+});
+
+// src/tabs/organization-drag.ts
+function installOrganizationDrag() {
+  const generation = currentLifecycleGeneration();
+  let cleanupDrag = null;
+  let suppressClickUntil = 0;
+  const suppressClick = (e) => {
+    if (Date.now() < suppressClickUntil) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  };
+  const down = (e) => {
+    if (!getModel()?.organization || e.button !== 0)
+      return;
+    const element = e.target;
+    const configureHandle = element?.closest(".canvas-configure-tabs-drag-handle");
+    const configureSource = configureHandle?.closest("[data-organization-ref]");
+    const source = configureSource ?? element?.closest("[data-canvas-organization],button[data-tab-id]");
+    if (!source || !configureSource && !isDragAndDropDrawerTabsEnabled() || !configureSource && source.closest(".canvas-configure-tabs-overlay") || source.hasAttribute("data-canvas-folder-member"))
+      return;
+    const primaryList = getMainMirrorTabList(), secondaryList = getSecondaryTabList();
+    const from = configureSource ? configureSource.closest("[data-side]")?.getAttribute("data-side") : primaryList?.contains(source) ? "primary" : secondaryList?.contains(source) ? "secondary" : null;
+    if (!from)
+      return;
+    const id = source.getAttribute("data-organization-ref") ?? source.getAttribute("data-canvas-organization") ?? getHost()?.findKey(source.getAttribute("data-tab-id") ?? "");
+    if (!id)
+      return;
+    cleanupDrag?.();
+    if (configureSource) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+    let touchReady = e.pointerType !== "touch" && e.pointerType !== "pen";
+    const armTimer = setTimeout(() => {
+      touchReady = true;
+    }, 200);
+    let folderDwell = null;
+    let started = false, overlay = null, target = null, highlighted = null;
+    const { clientX: x, clientY: y } = e;
+    const finish = () => {
+      clearTimeout(armTimer);
+      if (folderDwell)
+        clearTimeout(folderDwell);
+      document.removeEventListener("pointermove", move, true);
+      document.removeEventListener("pointerup", up, true);
+      document.removeEventListener("pointercancel", cancel, true);
+      document.removeEventListener("keydown", key, true);
+      overlay?.remove();
+      source.classList.remove("canvas-organization-drag-source");
+      highlighted?.classList.remove("canvas-folder-drop", "canvas-organization-insert-before", "canvas-organization-insert-after");
+      cleanupDrag = null;
+    };
+    const cancel = () => {
+      if (started)
+        suppressClickUntil = Date.now() + 250;
+      finish();
+    };
+    const key = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancel();
+      }
+    };
+    const move = (event) => {
+      if (!isLifecycleCurrent(generation)) {
+        cancel();
+        return;
+      }
+      const distance = Math.hypot(event.clientX - x, event.clientY - y);
+      if (!started && !touchReady) {
+        if (distance > 7 && !configureSource)
+          cancel();
+        return;
+      }
+      if (!started && distance < 7)
+        return;
+      if (!started) {
+        started = true;
+        source.classList.add("canvas-organization-drag-source");
+        overlay = source.cloneNode(true);
+        overlay.style.cssText = `position:fixed;pointer-events:none;z-index:12000;width:${source.getBoundingClientRect().width}px;height:${source.getBoundingClientRect().height}px;opacity:.85`;
+        document.body.appendChild(overlay);
+      }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (overlay) {
+        overlay.style.left = `${event.clientX + 12}px`;
+        overlay.style.top = `${event.clientY + 12}px`;
+      }
+      highlighted?.classList.remove("canvas-folder-drop", "canvas-organization-insert-before", "canvas-organization-insert-after");
+      highlighted = null;
+      target = null;
+      const model = getModel();
+      if (!model)
+        return;
+      if (configureSource) {
+        const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-organization-ref]");
+        const column = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-side]");
+        const side = column?.getAttribute("data-side");
+        if (side !== "primary" && side !== "secondary")
+          return;
+        if (!hit) {
+          target = { side, index: -1 };
+          return;
+        }
+        const ref = hit.getAttribute("data-organization-ref"), parent = hit.getAttribute("data-organization-parent") ?? undefined;
+        const index = Number(hit.getAttribute("data-organization-index")), box = hit.getBoundingClientRect(), fraction = (event.clientY - box.top) / box.height;
+        const folder = ref.startsWith("folder:") && !id.startsWith("folder:") && !id.startsWith("divider:") && fraction >= 0.3 && fraction <= 0.7 ? ref.slice(7) : undefined;
+        target = { side, index: folder ? -1 : index + (fraction > 0.5 ? 1 : 0), folder: folder ?? parent };
+        highlighted = hit;
+        hit.classList.add(folder ? "canvas-folder-drop" : fraction > 0.5 ? "canvas-organization-insert-after" : "canvas-organization-insert-before");
+        if (folder && !folderDwell) {
+          const disclosure = hit.querySelector("[aria-expanded=false]");
+          if (disclosure)
+            folderDwell = setTimeout(() => {
+              if (highlighted === hit)
+                disclosure.click();
+              folderDwell = null;
+            }, 650);
+        } else if (!folder && folderDwell) {
+          clearTimeout(folderDwell);
+          folderDwell = null;
+        }
+        return;
+      }
+      const horizontal = isHorizontalStrip();
+      for (const [side, list] of [["primary", getMainMirrorTabList()], ["secondary", getSecondaryTabList()]]) {
+        if (!list)
+          continue;
+        const rect = list.getBoundingClientRect();
+        if (event.clientX < rect.left - 12 || event.clientX > rect.right + 12 || event.clientY < rect.top - 12 || event.clientY > rect.bottom + 12)
+          continue;
+        const items = organizationFor(model)[side];
+        target = { side, index: items.length };
+        for (let index = 0;index < items.length; index++) {
+          const item = items[index];
+          const node = item.type === "tab" ? Array.from(list.querySelectorAll("button[data-tab-id]")).find((btn) => item.key && getHost()?.findKey(btn.getAttribute("data-tab-id") ?? "") === item.key) : Array.from(list.querySelectorAll("[data-canvas-organization]")).find((node) => node.getAttribute("data-canvas-organization") === itemId(item));
+          if (!node || node.getAttribute("data-canvas-folder-member") !== null || node.style.display === "none")
+            continue;
+          const box = node.getBoundingClientRect(), position = horizontal ? event.clientX : event.clientY, start = horizontal ? box.left : box.top, size = horizontal ? box.width : box.height;
+          if (position > start + size)
+            continue;
+          const fraction = (position - start) / size;
+          target = { side, index: index + (fraction > 0.7 ? 1 : 0) };
+          if (item.type === "folder" && !id.startsWith("folder:") && !id.startsWith("divider:") && fraction >= 0.3 && fraction <= 0.7)
+            target = { side, index: -1, folder: item.id };
+          highlighted = node;
+          node.classList.add(target.folder ? "canvas-folder-drop" : fraction > 0.7 ? "canvas-organization-insert-after" : "canvas-organization-insert-before");
+          break;
+        }
+      }
+    };
+    const up = (event) => {
+      const model = getModel(), dest = target;
+      if (started) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressClickUntil = Date.now() + 250;
+      }
+      finish();
+      if (started && dest && model && isLifecycleCurrent(generation)) {
+        commitOrganization((org) => {
+          const sourceIndex = org[from].findIndex((item) => itemId(item) === id);
+          const childSource = dest.folder ? org[from].find((item) => item.type === "folder" && item.id === dest.folder) : null;
+          const childIndex = childSource?.type === "folder" ? childSource.children.findIndex((ref) => referenceId(ref) === id) : -1;
+          const index = from === dest.side && (dest.folder ? childIndex >= 0 && childIndex < dest.index : sourceIndex >= 0 && sourceIndex < dest.index) ? dest.index - 1 : dest.index;
+          return relocateOrganizationItem(org, id, dest.side, index, dest.folder);
+        }).catch(showOrganizationError);
+      }
+    };
+    cleanupDrag = finish;
+    document.addEventListener("pointermove", move, { capture: true, passive: false });
+    document.addEventListener("pointerup", up, true);
+    document.addEventListener("pointercancel", cancel, true);
+    document.addEventListener("keydown", key, true);
+  };
+  document.addEventListener("pointerdown", down, true);
+  document.addEventListener("click", suppressClick, true);
+  return () => {
+    cleanupDrag?.();
+    document.removeEventListener("pointerdown", down, true);
+    document.removeEventListener("click", suppressClick, true);
+  };
+}
+var init_organization_drag = __esm(() => {
+  init_dispatch();
+  init_state();
+  init_main_mirror_drawer();
+  init_secondary();
+  init_organization_actions();
+});
+
+// src/tabs/folder-ui.ts
+function injectFolderStyles() {
+  if (document.getElementById("canvas-folder-styles"))
+    return;
+  const style = document.createElement("style");
+  style.id = "canvas-folder-styles";
+  style.textContent = `
+    [data-canvas-folder-member] { display:none !important; }
+    .canvas-folder-button { width:100%;height:48px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:0;border-radius:8px;background:transparent;color:var(--lumiverse-text-muted);cursor:pointer;transition:background .15s,color .15s; }
+    .canvas-folder-button:hover { background:var(--lumiverse-primary-010);color:var(--lumiverse-text); }
+    .canvas-folder-button.sidebar-ux-tab-active { background:var(--lumiverse-primary-015);color:var(--lumiverse-primary); }
+    .canvas-folder-button.sidebar-ux-tab-labeled { height:56px; }
+    .canvas-folder-button .sidebar-ux-tab-label { font-size:calc(10px * var(--lumiverse-font-scale,1));max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+    .canvas-tab-divider { width:28px;height:1px;margin:8px auto;flex-shrink:0;background:var(--lumiverse-border,var(--lumiverse-primary-020)); }
+    html.sidebar-ux-location-top .canvas-tab-divider,html.sidebar-ux-location-bottom .canvas-tab-divider,[data-strip-axis="horizontal"] .canvas-tab-divider { width:1px;height:28px;margin:0 4px; }
+    .sidebar-ux-panel[data-canvas-folder-browser] > .sidebar-ux-panel-content { display:none !important; }
+    .canvas-folder-browser { flex:1;min-height:0;overflow:auto;padding:12px;color:var(--lumiverse-text); }
+    .canvas-folder-toolbar { display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px;color:var(--lumiverse-text-muted);font-size:calc(12px * var(--lumiverse-font-scale,1)); }
+    .canvas-folder-actions { display:flex;gap:4px; }
+    .canvas-folder-toolbar button { display:flex;align-items:center;justify-content:center;min-width:32px;min-height:32px;border:0;background:transparent;color:inherit;padding:6px 8px;border-radius:6px;cursor:pointer; }
+    .canvas-folder-toolbar button[aria-pressed="true"],.canvas-folder-toolbar button:hover { background:var(--lumiverse-primary-010);color:var(--lumiverse-text); }
+    .canvas-folder-items { display:flex;flex-direction:column; }
+    .canvas-folder-items[data-view="grid"] { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(160px,100%),1fr));gap:8px; }
+    .canvas-folder-child { display:flex;align-items:center;gap:12px;text-align:left;width:100%;min-width:0;padding:12px;border:0;border-bottom:1px solid var(--lumiverse-border,var(--lumiverse-primary-010));border-radius:0;background:transparent;color:var(--lumiverse-text);cursor:pointer; }
+    .canvas-folder-child:hover { background:var(--lumiverse-primary-008); }
+    [data-view="grid"] .canvas-folder-child { border:1px solid var(--lumiverse-border,var(--lumiverse-primary-010));border-radius:8px;align-items:flex-start; }
+    .canvas-folder-child svg { width:20px;height:20px;flex-shrink:0; }
+    .canvas-folder-copy { display:flex;flex-direction:column;gap:4px;flex:1;min-width:0; }
+    .canvas-folder-copy strong { font-size:calc(13px * var(--lumiverse-font-scale,1));font-weight:500;overflow-wrap:anywhere; }
+    .canvas-folder-copy small,.canvas-folder-closed,.canvas-folder-empty { color:var(--lumiverse-text-muted);font-size:calc(12px * var(--lumiverse-font-scale,1)); }
+    .canvas-folder-empty { padding:24px 12px;text-align:center; }
+    [data-canvas-folder-browser] [data-canvas-os-minimize] { display:none !important; }
+    .canvas-folder-button:focus-visible,.canvas-folder-child:focus-visible,.canvas-folder-toolbar button:focus-visible { outline:2px solid var(--lumiverse-primary);outline-offset:-2px; }
+    .canvas-organization-drag-source { opacity:.35; }
+    .canvas-organization-error { position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:12000;padding:12px 16px;border:1px solid var(--lumiverse-border);border-radius:8px;background:var(--lumiverse-bg);color:var(--lumiverse-text); }
+    .canvas-organization-insert-before { box-shadow:inset 0 2px var(--lumiverse-primary); }
+    .canvas-organization-insert-after { box-shadow:inset 0 -2px var(--lumiverse-primary); }
+    html.sidebar-ux-location-top .canvas-organization-insert-before,html.sidebar-ux-location-bottom .canvas-organization-insert-before { box-shadow:inset 2px 0 var(--lumiverse-primary); }
+    html.sidebar-ux-location-top .canvas-organization-insert-after,html.sidebar-ux-location-bottom .canvas-organization-insert-after { box-shadow:inset -2px 0 var(--lumiverse-primary); }
+    .canvas-folder-drop { outline:2px solid var(--lumiverse-primary);outline-offset:-2px; }
+    .canvas-os-start-menu__drawer-label { display:block;padding:6px 12px;color:var(--lumiverse-text-muted);font-size:11px; }
+    .canvas-os-start-menu__folder { display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:0;border-radius:8px;background:transparent;color:var(--lumiverse-text);font:inherit;text-align:left;cursor:pointer; }
+    .canvas-os-start-menu__folder:hover { background:var(--lumiverse-primary-008); }
+    .canvas-os-start-menu__folder > span:nth-child(2) { flex:1; }
+    .canvas-os-start-menu__folder svg { display:block;width:18px;height:18px;color:var(--lumiverse-text-muted); }
+    .canvas-os-start-menu__folder-children { margin-left:18px;padding-left:6px;border-left:1px solid var(--lumiverse-primary-015); }
+    @media(max-width:600px) {
+      .sidebar-ux-main-mirror-wrapper .canvas-tab-divider,.sidebar-ux-secondary-wrapper .canvas-tab-divider { width:1px;height:28px;margin:0 4px; }
+    }
+    @media(prefers-reduced-motion:reduce) { .canvas-folder-button { transition:none; } }
+  `;
+  document.head.appendChild(style);
+}
+async function browseFolder(side, id) {
+  const generation = currentLifecycleGeneration();
+  const model = getModel();
+  if (!model || !folderFor(model, side, id))
+    return;
+  await dispatchBatch([{ t: "browseFolder", side, id }, { t: "setDrawer", side, open: true }]);
+  if (!isLifecycleCurrent(generation))
+    return;
+  if (side === "primary")
+    openCanvasMainDrawer();
+  else
+    openSecondarySidebar();
+  renderFolders();
+}
+async function launchFolderChild(key, side) {
+  const generation = currentLifecycleGeneration();
+  const host = getHost(), model = getModel(), live = host?.resolve(key);
+  if (!host || !model || !live)
+    return;
+  if (isOsModeEnabled()) {
+    const actions = await Promise.resolve().then(() => (init_actions(), {}));
+    if (!isLifecycleCurrent(generation))
+      return;
+    await openWindowInOwningDrawerByLiveId(live);
+  } else {
+    await dispatchBatch([{ t: "activate", key, side }, { t: "setDrawer", side, open: true }]);
+    if (!isLifecycleCurrent(generation))
+      return;
+    await host.activate(side, live);
+    if (!isLifecycleCurrent(generation))
+      return;
+    if (side === "primary")
+      openCanvasMainDrawer();
+    else
+      openSecondarySidebar();
+  }
+  if (!isLifecycleCurrent(generation))
+    return;
+  renderFolders();
+  const panel = side === "primary" ? getMainMirrorPanel() : getSecondaryPanel();
+  const focus = panel?.querySelector(".sidebar-ux-panel-title");
+  if (focus) {
+    focus.tabIndex = -1;
+    focus.focus();
+  }
+}
+function selectableChildren(folder) {
+  const model = getModel(), host = getHost();
+  if (!model || !host)
+    return [];
+  return folder.children.flatMap((ref) => ref.key && browserVisible(model, ref.key) && host.resolve(ref.key) && host.findKey(host.resolve(ref.key)) && !isGhostPresentationPending(ref.key) ? [ref.key] : []);
+}
+function renderOrganizationStrip(side) {
+  const model = getModel(), host = getHost();
+  if (!model?.organization || !host)
+    return;
+  const list = side === "primary" ? getMainMirrorTabList() : getSecondaryTabList();
+  if (!list)
+    return;
+  const main = list.querySelector(".sidebar-ux-tab-list-main") ?? list;
+  const buttons = Array.from(main.querySelectorAll("button[data-tab-id]"));
+  for (const button of buttons) {
+    const live = button.getAttribute("data-tab-id"), key = live ? host.findKey(live) : null;
+    if (key)
+      button.classList.toggle("sidebar-ux-tab-active", model.drawers[side].open && model.active[side] === key);
+    if (key && folderContaining(model, side, key))
+      button.setAttribute("data-canvas-folder-member", "");
+    else
+      button.removeAttribute("data-canvas-folder-member");
+  }
+  const desired = [];
+  const wanted = new Set;
+  for (const item of organizationFor(model)[side]) {
+    if (item.type === "tab") {
+      const button = buttons.find((btn) => item.key && host.findKey(btn.getAttribute("data-tab-id") ?? "") === item.key);
+      if (button)
+        desired.push(button);
+      continue;
+    }
+    const id = itemId(item);
+    wanted.add(id);
+    let node = Array.from(main.children).find((el) => el.getAttribute("data-canvas-organization") === id);
+    if (!node) {
+      node = document.createElement(item.type === "folder" ? "button" : "div");
+      node.setAttribute("data-canvas-organization", id);
+      if (item.type === "folder") {
+        const button = node;
+        button.type = "button";
+        button.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          browseFolder(side, item.id);
+        });
+        button.addEventListener("contextmenu", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          Promise.resolve().then(() => (init_tab_context_menu(), {})).then((m) => showOrganizationMenu(ev.clientX, ev.clientY, side, id, button));
+        });
+        wireLongPress(button);
+      } else {
+        node.setAttribute("role", "separator");
+        node.addEventListener("contextmenu", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          Promise.resolve().then(() => (init_tab_context_menu(), {})).then((m) => showOrganizationMenu(ev.clientX, ev.clientY, side, id, node));
+        });
+        wireLongPress(node);
+      }
+    }
+    if (item.type === "divider") {
+      node.className = "canvas-tab-divider";
+      node.title = item.label ?? "";
+      node.setAttribute("aria-label", item.label || "Divider");
+    } else {
+      const keys = selectableChildren(item), labeled = isShowTabLabels(), active = model.drawers[side].open && (model.folderBrowser?.[side] === item.id || item.children.some((ref) => ref.key === model.active[side]));
+      node.className = `canvas-folder-button ${side === "primary" ? "sidebar-ux-main-tab-mirror-btn" : "sidebar-ux-tab-btn"}${labeled ? " sidebar-ux-tab-labeled" : ""}${active ? " sidebar-ux-tab-active" : ""}`;
+      node.style.display = keys.length || model.folderBrowser?.[side] === item.id ? "" : "none";
+      node.title = `${item.name} (${keys.length} ${keys.length === 1 ? "tab" : "tabs"})`;
+      node.setAttribute("aria-label", node.title);
+      const html = folderIconSvg(item);
+      if (node.getAttribute("data-folder-icon") !== html) {
+        node.innerHTML = html;
+        node.setAttribute("data-folder-icon", html);
+      }
+      let label = node.querySelector(".sidebar-ux-tab-label");
+      if (labeled && !label) {
+        label = document.createElement("span");
+        label.className = "sidebar-ux-tab-label";
+        node.appendChild(label);
+      }
+      if (label) {
+        if (label.textContent !== item.name)
+          label.textContent = item.name;
+        label.hidden = !labeled;
+      }
+    }
+    desired.push(node);
+  }
+  for (const el of Array.from(main.querySelectorAll("[data-canvas-organization]")))
+    if (!wanted.has(el.getAttribute("data-canvas-organization")))
+      el.remove();
+  desired.push(...buttons.filter((button) => button.hasAttribute("data-canvas-folder-member")));
+  let cursor = main.firstChild;
+  for (const node of desired) {
+    if (node !== cursor)
+      main.insertBefore(node, cursor);
+    cursor = node.nextSibling;
+  }
+}
+function renderFolders() {
+  const model = getModel(), host = getHost();
+  if (!model || !host || typeof document === "undefined")
+    return;
+  injectFolderStyles();
+  if (model.organization) {
+    const org = organizationFor(model);
+    const resolve = (ref) => {
+      const key = ref.key ? host.findKey(ref.key) : host.findKey(ref.tabId ?? "");
+      return key ? { key } : ref;
+    };
+    const map = (side) => org[side].map((item) => item.type === "tab" ? { type: "tab", ...resolve(item) } : item.type === "folder" ? { ...item, children: item.children.map(resolve) } : item);
+    const healed = { version: 1, primary: map("primary"), secondary: map("secondary") };
+    if (JSON.stringify(healed) !== JSON.stringify(org)) {
+      dispatch({ t: "setOrganization", organization: healed });
+      return;
+    }
+  }
+  const catalog = getFullCatalog();
+  for (const side of ["primary", "secondary"]) {
+    renderOrganizationStrip(side);
+    const panel = side === "primary" ? getMainMirrorPanel() : getSecondaryPanel();
+    if (!panel)
+      continue;
+    const folder = folderFor(model, side, model.folderBrowser?.[side]);
+    let browser = panel.querySelector(".canvas-folder-browser");
+    if (!folder) {
+      const hadFocus = !!browser?.contains(document.activeElement);
+      panel.removeAttribute("data-canvas-folder-browser");
+      browser?.remove();
+      signatures.delete(panel);
+      if (hadFocus) {
+        const title = panel.querySelector(".sidebar-ux-panel-title");
+        if (title) {
+          title.tabIndex = -1;
+          title.focus();
+        }
+      }
+      continue;
+    }
+    panel.setAttribute("data-canvas-folder-browser", folder.id);
+    const title = panel.querySelector(".sidebar-ux-panel-title");
+    if (title && title.textContent !== folder.name)
+      title.textContent = folder.name;
+    const keys = selectableChildren(folder);
+    const signature = JSON.stringify([folder, keys, keys.map((key) => [host.resolve(key), model.closed.includes(key)]), catalog.map((tab) => [tab.id, tab.title, tab.description])]);
+    if (signatures.get(panel) === signature && browser)
+      continue;
+    const hadFocus = !!browser?.contains(document.activeElement);
+    const focused = hadFocus ? document.activeElement?.getAttribute("data-folder-child") : null;
+    const focusedAction = hadFocus ? document.activeElement?.getAttribute("data-folder-action") : null;
+    browser?.remove();
+    browser = document.createElement("div");
+    browser.className = "canvas-folder-browser";
+    const toolbar = document.createElement("div");
+    toolbar.className = "canvas-folder-toolbar";
+    const count = document.createElement("span");
+    count.textContent = `${keys.length} ${keys.length === 1 ? "tab" : "tabs"}`;
+    const actions = document.createElement("div");
+    actions.className = "canvas-folder-actions";
+    actions.setAttribute("role", "group");
+    actions.setAttribute("aria-label", "Folder view");
+    for (const view of ["list", "grid"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">${view === "list" ? '<path d="M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1"/>' : '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>'}</svg>`;
+      button.title = `${view === "list" ? "List" : "Grid"} view`;
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-pressed", String((folder.view ?? "list") === view));
+      button.setAttribute("data-folder-action", view);
+      button.addEventListener("click", () => {
+        const current = getModel();
+        if (!current)
+          return;
+        const org = organizationFor(current);
+        dispatch({ t: "setOrganization", organization: { ...org, [side]: org[side].map((item) => item.type === "folder" && item.id === folder.id ? { ...item, view } : item) } });
+      });
+      actions.appendChild(button);
+    }
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12 2 2 3 4-1 1 4 3 2-2 3 1 4-4 1-2 3-3-2-4 1-1-4-3-2 2-3-1-4 4-1Z"/><circle cx="12" cy="12" r="3"/></svg>';
+    edit.title = "Configure tabs";
+    edit.setAttribute("aria-label", edit.title);
+    edit.addEventListener("click", () => configure(folder.id));
+    actions.appendChild(edit);
+    toolbar.append(count, actions);
+    browser.appendChild(toolbar);
+    const items = document.createElement("div");
+    items.className = "canvas-folder-items";
+    items.setAttribute("data-view", folder.view ?? "list");
+    for (const key of keys) {
+      const id = host.resolve(key), tab = catalog.find((t) => t.id === id), button = document.createElement("button");
+      button.type = "button";
+      button.className = "canvas-folder-child";
+      button.setAttribute("data-folder-child", key);
+      const icon = document.createElement("span");
+      icon.innerHTML = tab?.iconSvg ?? BUILTIN_ICON_SVGS[id] ?? "";
+      button.appendChild(icon);
+      const copy = document.createElement("span");
+      copy.className = "canvas-folder-copy";
+      const name = document.createElement("strong");
+      name.textContent = tab?.title ?? id;
+      copy.appendChild(name);
+      if (tab?.description) {
+        const description = document.createElement("small");
+        description.textContent = tab.description;
+        copy.appendChild(description);
+      }
+      button.appendChild(copy);
+      const status = document.createElement("span");
+      status.className = "canvas-folder-closed";
+      status.textContent = isOsModeEnabled() && model.closed.includes(key) ? "Closed" : "›";
+      button.appendChild(status);
+      button.addEventListener("click", () => {
+        launchFolderChild(key, side);
+      });
+      button.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        Promise.resolve().then(() => (init_tab_context_menu(), {})).then((m) => showAssignmentMenu(ev.clientX, ev.clientY, id, tab?.title ?? id, button));
+      });
+      wireLongPress(button);
+      items.appendChild(button);
+    }
+    if (!keys.length) {
+      const empty = document.createElement("div");
+      empty.className = "canvas-folder-empty";
+      empty.textContent = "This folder has no visible tabs right now.";
+      items.appendChild(empty);
+    }
+    browser.appendChild(items);
+    panel.appendChild(browser);
+    signatures.set(panel, signature);
+    const focusTarget = focused ? Array.from(browser.querySelectorAll("[data-folder-child]")).find((el) => el.getAttribute("data-folder-child") === focused) : focusedAction ? browser.querySelector(`[data-folder-action="${CSS.escape(focusedAction)}"]`) : null;
+    if (hadFocus)
+      (focusTarget ?? browser.querySelector("button"))?.focus();
+  }
+}
+function mountFolders() {
+  const generation = currentLifecycleGeneration();
+  observed = new WeakSet;
+  const schedule = () => {
+    if (scheduled)
+      return;
+    scheduled = true;
+    queueMicrotask(() => {
+      scheduled = false;
+      if (isLifecycleCurrent(generation)) {
+        const model = getModel();
+        if (model && !model.organization)
+          dispatch({ t: "setOrganization", organization: organizationFor(model) });
+        else
+          renderFolders();
+      }
+    });
+  };
+  const stopNavigation = observeExplicitHostNavigation();
+  const stopDrag = installOrganizationDrag();
+  stop?.();
+  stop = onModelChanged(schedule);
+  observer = new MutationObserver(schedule);
+  const watch = () => {
+    for (const list of [getMainMirrorTabList(), getSecondaryTabList()])
+      if (list && !observed.has(list)) {
+        observed.add(list);
+        observer?.observe(list, { childList: true, subtree: true });
+      }
+    schedule();
+  };
+  document.addEventListener(DRAWER_SHELL_CREATED_EVENT, watch);
+  watch();
+  return () => {
+    stopNavigation();
+    stopDrag();
+    stop?.();
+    stop = null;
+    observer?.disconnect();
+    observer = null;
+    document.removeEventListener(DRAWER_SHELL_CREATED_EVENT, watch);
+    document.getElementById("canvas-folder-styles")?.remove();
+    for (const el of document.querySelectorAll("[data-canvas-folder-member],[data-canvas-folder-browser]")) {
+      el.removeAttribute("data-canvas-folder-member");
+      el.removeAttribute("data-canvas-folder-browser");
+    }
+    document.querySelectorAll(".canvas-folder-browser,[data-canvas-organization]").forEach((el) => el.remove());
+  };
+}
+function wireLongPress(node) {
+  let timer = null, x = 0, y = 0, suppress = false;
+  const clear = () => {
+    if (timer)
+      clearTimeout(timer);
+    timer = null;
+  };
+  node.addEventListener("pointerdown", (event) => {
+    if (event.pointerType !== "touch" && event.pointerType !== "pen")
+      return;
+    clear();
+    x = event.clientX;
+    y = event.clientY;
+    const generation = currentLifecycleGeneration();
+    timer = setTimeout(() => {
+      if (!node.isConnected || !isLifecycleCurrent(generation))
+        return;
+      suppress = true;
+      node.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: x, clientY: y }));
+    }, 450);
+  });
+  node.addEventListener("pointermove", (event) => {
+    if (Math.hypot(event.clientX - x, event.clientY - y) > 6)
+      clear();
+  });
+  node.addEventListener("pointerup", clear);
+  node.addEventListener("pointercancel", clear);
+  node.addEventListener("click", (event) => {
+    if (!suppress)
+      return;
+    suppress = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+}
+var stop = null, observer = null, scheduled = false, observed, signatures, configure = (id) => {
+  const generation = currentLifecycleGeneration();
+  Promise.resolve().then(() => (init_configure_modal(), {})).then((m) => {
+    if (isLifecycleCurrent(generation))
+      openConfigureTabsModal(id);
+  });
+};
+var init_folder_ui = __esm(() => {
+  init_dispatch();
+  init_main_mirror_drawer();
+  init_secondary();
+  init_drawer_shell();
+  init_configure_catalog();
+  init_builtin_icons();
+  init_drawer_sync();
+  init_state();
+  init_ghost_presentation();
+  init_folder_icons();
+  init_host_navigation();
+  init_organization_drag();
+  observed = new WeakSet;
+  signatures = new WeakMap;
 });
 
 // src/tabs/buttons.ts
@@ -14049,6 +16071,12 @@ function addSecondaryTabButton(tab) {
   labelSpan.style.cssText = showLabels ? `opacity:1;height:auto;margin-top:1px;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease` : `display:none;visibility:hidden;opacity:0;height:0;min-height:0;margin-top:0;transition:opacity 0.2s ease, height 0.2s ease, margin 0.2s ease`;
   btn.appendChild(labelSpan);
   btn.addEventListener("click", () => {
+    if (getModel()?.folderBrowser?.secondary) {
+      const key = getHost()?.findKey(tab.id);
+      if (key)
+        Promise.resolve().then(() => (init_folder_ui(), {})).then((m) => launchFolderChild(key, "secondary"));
+      return;
+    }
     if (isOsModeEnabled()) {
       Promise.resolve().then(() => (init_actions(), {})).then((m) => toggleWindowByLiveId(tab.id, "secondary"));
       return;
@@ -15916,6 +17944,8 @@ function diffHidden(model, side, resolved, world) {
   return diff.length > 0 ? modelHiddenIds : null;
 }
 function diffActive(model, side, resolved, world) {
+  if (model.folderBrowser?.[side])
+    return null;
   const modelActive = model.active[side];
   if (!modelActive)
     return null;
@@ -16203,8 +18233,8 @@ function mergeResolvedInto(current, rebuilt) {
     hidden: keepUser ? current.hidden : hidden,
     menuHidden: keepUser ? current.menuHidden : menuHidden,
     active: {
-      primary: current.active.primary ?? rebuilt.active.primary,
-      secondary: current.active.secondary ?? rebuilt.active.secondary
+      primary: current.folderBrowser?.primary ? null : current.active.primary ?? rebuilt.active.primary,
+      secondary: current.folderBrowser?.secondary ? null : current.active.secondary ?? rebuilt.active.secondary
     },
     drawers: keepUser ? current.drawers : rebuilt.drawers,
     side: keepUser ? current.side : rebuilt.side
@@ -16218,7 +18248,7 @@ function markPendingWindowUserIntent(intent) {
   if (_pendingLayout === null)
     return;
   const t = intent.t;
-  if (t === "setDrawer" || t === "swapSides" || t === "setHidden" || t === "setMenuHidden") {
+  if (t === "setDrawer" || t === "swapSides" || t === "setHidden" || t === "setMenuHidden" || t === "setOrganization" || t === "browseFolder") {
     _pendingWindowUserState = true;
   }
 }
@@ -16378,7 +18408,7 @@ function buildPersistedBlob(model, resolve) {
   const layout = serializeModelToLayout(model, resolve, _version);
   const isDual = model.secondary.length > 0;
   const os = _persistOsOverride ?? _persistOsBootOverride ?? isOsModeEnabled();
-  const base = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [] };
+  const base = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [], closeHidden: [], ...layout.leafState ? { leafState: { ...layout.leafState, closed: [], menuHidden: [] } } : {} };
   const s = getSettings();
   const lastPrimary = getLastLoadedLayout()?.primary ?? null;
   const basePrimary = base.primary ?? {};
@@ -16467,7 +18497,7 @@ function refreshDualProfileAfterExplicitMove(before, after, intents, resolve) {
   if (!movedFinalTabToPrimary)
     return null;
   const layout = serializeModelToLayout(after, resolve, _version);
-  const profile = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [] };
+  const profile = os ? layout : { ...layout, closedTabIds: [], menuHiddenTabIds: [], closeHidden: [], ...layout.leafState ? { leafState: { ...layout.leafState, closed: [], menuHidden: [] } } : {} };
   if (os)
     setOsDualLayoutSlot(profile);
   else
@@ -16701,7 +18731,11 @@ async function applyMainMirrorMoveChrome(chrome, liveId) {
   if (btn && btn.isConnected) {
     dlog(`[tabmove] apply chrome: re-asserting model active content (${id})`);
     try {
-      btn.click();
+      if (btn.getAttribute("aria-hidden") === "true") {
+        await Promise.resolve().then(() => init_host_navigation());
+        navigateHostTab(id, btn);
+      } else
+        btn.click();
     } catch {}
   } else {
     dlog("[tabmove] apply chrome: re-assert button not found in main sidebar", { id });
@@ -18867,12 +20901,16 @@ async function ensureBuiltInTabActiveInMain(tabId, h = {}) {
     return;
   }
   _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`);
-  btn.click();
+  if (btn.getAttribute?.("aria-hidden") === "true") {
+    await Promise.resolve().then(() => init_host_navigation());
+    navigateHostTab(tabId, btn);
+  } else
+    btn.click();
   await new Promise((r) => requestAnimationFrame(() => r()));
   const root = _getRoot(tabId);
   _dlog(`[canvas-debug] ENSURE_ACTIVE_DONE tab=${tabId} rootAfter=${root?.tagName ?? "null"}`);
   if (!root) {
-    _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; ` + `move will fall through to host lazy-mount`);
+    _dlog(`[tabmove] ensure-active: post-click root still null for "${tabId}"; move will fall through to host lazy-mount`);
   }
 }
 var _tabAssignments;
@@ -19495,7 +21533,7 @@ function whenPanelParkingReady(side, apply) {
 function applyNoActiveParking(side) {
   if (!_active4 || !isOsModeEnabled())
     return;
-  if (getDisplayedLiveId(side))
+  if (getDisplayedLiveId(side) || getModel()?.folderBrowser?.[side])
     return;
   if (side === "primary")
     setCanvasMainNoActive(true);
@@ -19515,6 +21553,16 @@ function ensureChromeForSide(side) {
     return;
   ensureHeaderObserved(surface.header);
   const displayed = getDisplayedLiveId(side);
+  const browsing = !!getModel()?.folderBrowser?.[side];
+  if (browsing) {
+    if (side === "primary")
+      setCanvasMainNoActive(false);
+    setHeaderHidden(surface.closeBtn, false);
+    const min = surface.actions.querySelector(`button[${MINIMIZE_ATTR}]`);
+    if (min)
+      setHeaderHidden(min, true);
+    return;
+  }
   if (displayed) {
     if (side === "primary")
       setCanvasMainNoActive(false);
@@ -19602,6 +21650,8 @@ function mountPanelChrome() {
     return;
   _active4 = true;
   setPanelHeaderCloseHandler((side) => {
+    if (getModel()?.folderBrowser?.[side])
+      return false;
     if (!isOsModeEnabled())
       return false;
     const liveId = getDisplayedLiveId(side);
@@ -20274,6 +22324,7 @@ function snapshotLayout() {
   const drawerTabs = getDrawerTabs();
   return {
     version: CANVAS_VERSION,
+    ...snapshotOwnedModelLayout(),
     primary: {
       open: readPrimaryOpen(),
       width: readPrimaryWidth(),
@@ -20302,6 +22353,7 @@ function seedDualLayoutFromLive() {
   const primaryWidth = live.primary?.width > 0 ? live.primary.width : 420;
   const seed = {
     version: live.version,
+    ...live.organization ? { organization: live.organization, folderBrowser: live.folderBrowser, rememberedLeaf: live.rememberedLeaf, closeHidden: live.closeHidden, leafState: live.leafState, nativeOrganizationBaseline: live.nativeOrganizationBaseline, nativeOrganizationProjection: live.nativeOrganizationProjection, nativeAddresses: live.nativeAddresses } : {},
     primary: {
       open: live.primary?.open ?? false,
       width: primaryWidth,
@@ -20336,6 +22388,7 @@ function buildPersistedLayout() {
   const tabsLive = s.secondSidebarEnabled;
   return {
     version: live.version,
+    ...live.organization ? { organization: live.organization, folderBrowser: live.folderBrowser, rememberedLeaf: live.rememberedLeaf, closeHidden: live.closeHidden, leafState: live.leafState, nativeOrganizationBaseline: live.nativeOrganizationBaseline, nativeOrganizationProjection: live.nativeOrganizationProjection, nativeAddresses: live.nativeAddresses } : {},
     primary: {
       open: s.persistDrawerOpenState ? live.primary.open : base.primary.open ?? false,
       width: s.persistDrawerWidth ? live.primary.width : base.primary.width ?? 420,
@@ -24960,6 +27013,58 @@ var init_panel = __esm(() => {
   ];
 });
 
+// src/tabs/native-organization.ts
+function adoptNativeOrganization(layout, host) {
+  const saved = layout && typeof layout === "object" ? layout : {};
+  let model = buildModelFromLayout(saved, (id) => host.findKey(id));
+  const native = findHostStoreApi()?.getState?.()?.drawerSettings ?? refreshHostDrawerSettings();
+  const raw = Array.isArray(native?.layout) ? native.layout : [];
+  const fingerprint = JSON.stringify(raw);
+  const baseline = typeof native?.canvasOrganizationProjection === "string" ? native.canvasOrganizationProjection : saved.nativeOrganizationProjection ?? saved.nativeOrganizationBaseline;
+  const changedOutside = baseline !== undefined && fingerprint !== baseline;
+  if (changedOutside || !saved.organization) {
+    model = reduce(model, { t: "setOrganization", organization: raw.length || changedOutside ? importNativeOrganization(raw.length ? raw : (native?.tabOrder ?? []).map((tabId) => ({ type: "tab", tabId })), model, (id) => host.findKey(id)) : normalizeOrganization(model) });
+  }
+  return { ...saved, ...serializeModelToLayout({ ...model, nativeOrganizationBaseline: fingerprint }, (key) => host.resolve(key), saved.version ?? "unknown") };
+}
+function keepNativeDisableProjection(host) {
+  let projection = null;
+  const addresses = {};
+  const capture = () => {
+    const model = getModel();
+    if (!model?.organization)
+      return;
+    Object.assign(addresses, model.nativeAddresses);
+    for (const key of [...model.primary, ...model.secondary]) {
+      const id = host.resolve(key);
+      if (id)
+        addresses[key] = id;
+    }
+    projection = projectNativeOrganization(model.organization, (key) => host.resolve(key) ?? addresses[key] ?? null);
+  };
+  capture();
+  const stop = onModelChanged(capture);
+  return () => {
+    stop();
+    if (!projection)
+      return;
+    const api = findHostStoreApi();
+    const current = api?.getState?.()?.drawerSettings ?? refreshHostDrawerSettings() ?? {};
+    const layout = projection;
+    const tabOrder = layout.flatMap((item) => item.type === "tab" ? [item.tabId] : item.type === "folder" ? item.children : []);
+    const settings = { ...current, layout, tabOrder, canvasOrganizationProjection: JSON.stringify(layout) };
+    if (!callHostStoreAction("setSetting", "drawerSettings", settings) && !patchHostDrawerSettings(settings))
+      console.warn("[canvas] Native folder projection could not be saved: host settings bridge unavailable.");
+  };
+}
+var init_native_organization = __esm(() => {
+  init_layout_model();
+  init_reduce();
+  init_host_settings();
+  init_store();
+  init_dispatch();
+});
+
 // src/layout/mode-recovery.ts
 function isMobileViewportLocal3() {
   try {
@@ -25567,7 +27672,7 @@ function startContextMenuListener() {
     hideAssignmentMenu();
     const target = evt.target;
     const tabBtn = target?.closest?.("button[title]");
-    if (!tabBtn) {
+    if (!tabBtn || tabBtn.hasAttribute("data-canvas-organization") || String(tabBtn.className).includes("folderTabBtn")) {
       _pendingTabInfo = null;
       return;
     }
@@ -26118,6 +28223,8 @@ init_canvas_hidden();
 init_secondary();
 init_secondary_drawer();
 init_buttons();
+init_dispatch();
+init_host_navigation();
 init_drawer_observer();
 init_identity();
 init_main_mirror_drawer();
@@ -26296,7 +28403,7 @@ class LumiverseHost {
           armGhostRetry(tabKey);
           setGhostPresentationPending(tabKey, true);
         }
-        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
+        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS && !getModel()?.organization) {
           dlog("[host] observe: extension key absent past ghost grace — dropping from observed world", {
             key: tabKey,
             missingForMs: nowMs - missingSince
@@ -26350,7 +28457,15 @@ class LumiverseHost {
     const secondaryOpen = isSecondarySidebarOpen();
     const secondaryWidth = readSecondaryWidth2();
     return {
-      tabs: entries,
+      tabs: getModel()?.organization ? entries.sort((a, b) => {
+        const model = getModel();
+        const order = [...model.primary, ...model.secondary];
+        const rank = (entry) => {
+          const index = order.indexOf(entry.key);
+          return index < 0 ? order.length : index;
+        };
+        return rank(a) - rank(b);
+      }) : entries,
       inventory: drawerObserver.getSnapshot(),
       drawerSide,
       primaryOpen,
@@ -26397,6 +28512,8 @@ class LumiverseHost {
   async setOrder(side, ids) {
     try {
       dlog("[host] setOrder:start", { side, ids });
+      if (getModel()?.organization)
+        return "ok";
       if (side === "secondary") {
         if (!secondaryTabButtonsReady(ids)) {
           dlog("[host] setOrder:secondary-not-ready", { ids });
@@ -26480,7 +28597,8 @@ class LumiverseHost {
         return "degraded";
       }
       try {
-        hostBtn.click();
+        if (!navigateHostTab(id))
+          return "degraded";
       } catch {}
       return "ok";
     } catch {
@@ -26830,7 +28948,16 @@ function setup(ctx) {
     const coreHost = new LumiverseHost;
     try {
       dlog(`bootstrapFromLayout:start`);
-      bootstrapFromLayout(layout, coreHost, CANVAS_VERSION);
+      const organization = await Promise.resolve().then(() => (init_native_organization(), {}));
+      if (!isCurrent())
+        return;
+      const organizationLayout = adoptNativeOrganization(layout, coreHost);
+      bootstrapFromLayout(organizationLayout, coreHost, CANVAS_VERSION);
+      registerCleanup(keepNativeDisableProjection(coreHost));
+      const folders = await Promise.resolve().then(() => (init_folder_ui(), {}));
+      if (!isCurrent())
+        return;
+      registerCleanup(mountFolders());
       dlog(`bootstrapFromLayout:returned (async reconcile still in flight)`);
       bootStep(`bootstrap gen=${generation}`);
     } catch (bootstrapErr) {

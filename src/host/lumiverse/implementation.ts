@@ -37,6 +37,8 @@ import {
   applyHiddenTabIdsToHostMain,
   findMainTabButton,
 } from '../../tabs/buttons'
+import { getModel } from '../../recon/dispatch'
+import { navigateHostTab } from '../../tabs/host-navigation'
 import { drawerObserver } from '../../sidebar/drawer-observer'
 import { liveIdForKey, keyForLiveId, type TabShape } from '../../tabs/identity'
 import { getMainMirrorDrawer, isMainMirrorActive } from '../../sidebar/main-mirror-drawer'
@@ -425,7 +427,7 @@ export class LumiverseHost implements HostPort {
           armGhostRetry(tabKey)
           setGhostPresentationPending(tabKey, true)
         }
-        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS) {
+        if (nowMs - missingSince >= GHOST_FACADE_GRACE_MS && !getModel()?.organization) {
           dlog('[host] observe: extension key absent past ghost grace — dropping from observed world', {
             key: tabKey,
             missingForMs: nowMs - missingSince,
@@ -509,7 +511,14 @@ export class LumiverseHost implements HostPort {
     const secondaryWidth = readSecondaryWidth()
 
     return {
-      tabs: entries,
+      // Organization order is model-owned; the native DOM includes nested,
+      // noninteractive mount anchors whose order Canvas must not mutate.
+      tabs: getModel()?.organization ? entries.sort((a, b) => {
+        const model = getModel()!
+        const order = [...model.primary, ...model.secondary]
+        const rank = (entry: HostTabEntry) => { const index = order.indexOf(entry.key); return index < 0 ? order.length : index }
+        return rank(a) - rank(b)
+      }) : entries,
       inventory: drawerObserver.getSnapshot(),
       drawerSide,
       primaryOpen,
@@ -579,6 +588,7 @@ export class LumiverseHost implements HostPort {
   async setOrder(side: Side, ids: LiveTabId[]): Promise<WriteResult> {
     try {
       dlog('[host] setOrder:start', { side, ids })
+      if (getModel()?.organization) return 'ok'
       if (side === 'secondary') {
         if (!secondaryTabButtonsReady(ids)) {
           dlog('[host] setOrder:secondary-not-ready', { ids })
@@ -728,7 +738,7 @@ export class LumiverseHost implements HostPort {
       // "Already active" is an idempotent no-op re-render. The mirror's
       // highlight/title follow the model (flat renderer).
       try {
-        hostBtn.click()
+        if (!navigateHostTab(id)) return 'degraded'
       } catch {
         /* host may throw during teardown */
       }

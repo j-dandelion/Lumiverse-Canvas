@@ -382,7 +382,7 @@ export function startContextMenuListener(): void {
     // document listeners from firing.
     const target = evt.target as HTMLElement
     const tabBtn = target?.closest?.('button[title]') as HTMLElement | null
-    if (!tabBtn) { _pendingTabInfo = null; return }
+    if (!tabBtn || tabBtn.hasAttribute('data-canvas-organization') || String(tabBtn.className).includes('folderTabBtn')) { _pendingTabInfo = null; return }
 
     // Skip the Settings button (in .sidebarBottom, not a real tab).
     // Both built-in tabs and extension tabs get the move option.

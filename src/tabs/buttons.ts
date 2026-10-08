@@ -35,7 +35,7 @@ import {
   isTaskbarModeEnabled,
 } from '../settings/state'
 import { getActiveSecondaryTabId, getTabAssignments, setActiveSecondaryTabId, getTabSidebar } from '../tabs/assignment'
-import { getHost } from '../recon/dispatch'
+import { getModel, getHost } from '../recon/dispatch'
 import { showAssignmentMenu } from './tab-context-menu'
 import { isTabIdHidden } from '../persist/tab-id-heal'
 import { appendSecondaryTabNode } from './secondary-start-dock'
@@ -419,6 +419,11 @@ export function addSecondaryTabButton(tab: SecondaryTabDescriptor): void {
   btn.appendChild(labelSpan)
 
   btn.addEventListener('click', () => {
+    if (getModel()?.folderBrowser?.secondary) {
+      const key = getHost()?.findKey(tab.id)
+      if (key) void import('./folder-ui').then(m => m.launchFolderChild(key, 'secondary'))
+      return
+    }
     // OS mode (D4/D19, spec §4.3): every strip click is a window-state
     // toggle — model-derived displayed predicate (minimize) or open/restore
     // (auto-opens a closed drawer, converges tracked + model active, clicks

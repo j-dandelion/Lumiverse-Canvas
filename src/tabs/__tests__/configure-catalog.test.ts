@@ -35,7 +35,7 @@ function setupStore() {
 // =====================================================================
 // BUILTIN_CATALOG_VERSION is a stable string
 // =====================================================================
-assertEqual(BUILTIN_CATALOG_VERSION, 'lumiverse-drawer-tabs-2026-07', 'BUILTIN_CATALOG_VERSION string')
+assertEqual(BUILTIN_CATALOG_VERSION, 'lumiverse-staging-drawer-tabs-c975b917', 'BUILTIN_CATALOG_VERSION string')
 
 // =====================================================================
 // BUILTIN_TAB_IDS has the expected count and first/last entries

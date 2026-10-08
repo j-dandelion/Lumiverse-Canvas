@@ -65,6 +65,10 @@ export function liveIdForKey(key: TabKey, tabs: readonly TabShape[]): string | n
       return tBase === base
     })
     if (idMatch) return idMatch.id
+    if (builtinId === 'ooc' || builtinId === 'feedback') {
+      const council = tabs.find(t => t.id === 'council')
+      if (council) return council.id
+    }
     const titleMatch = builtinId ? tabs.find((t) => t.title === builtinId) : undefined
     if (titleMatch) return titleMatch.id
     return builtinId
@@ -105,6 +109,10 @@ export function liveIdForKey(key: TabKey, tabs: readonly TabShape[]): string | n
 export function keyForLiveId(id: string, tabs: readonly TabShape[]): TabKey | null {
   let match = tabs.find((t) => t.id === id)
   if (match) return match.key ?? null
+  if (id === 'ooc' || id === 'feedback') {
+    const council = tabs.find(t => t.id === 'council')
+    if (council) return council.key ?? null
+  }
 
   const idBase = id.includes(':') ? id.slice(0, id.lastIndexOf(':')) : id
   match = tabs.find((t) => {

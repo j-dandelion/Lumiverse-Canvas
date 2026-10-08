@@ -282,7 +282,10 @@ export async function ensureBuiltInTabActiveInMain(
   }
   // btn is Element (per buttons.ts:47) — narrow at click site.
   _dlog(`[canvas-debug] ENSURE_ACTIVE_CLICK tab=${tabId}`)
-  ;(btn as HTMLElement).click()
+  if ((btn as HTMLElement).getAttribute?.('aria-hidden') === 'true') {
+    const { navigateHostTab } = await import('./host-navigation')
+    navigateHostTab(tabId, btn as HTMLElement)
+  } else (btn as HTMLElement).click()
 
   // Wait for one rAF (~16ms) so Lumiverse commits the activation and
   // Lorebook's mount useEffect fires. 1-16ms is the documented latency

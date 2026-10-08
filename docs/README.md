@@ -79,3 +79,10 @@ User toggles setting in panel
 - **Features**: add `CanvasFeature` to `FEATURES` array in `features/registry.ts`
 - **Settings**: add field to `CanvasSettings` interface in `types.ts`, add default in `DEFAULT_CANVAS_SETTINGS`, add toggle in `settings/panel.ts`
 - **Custom CSS / themes**: prefer Lumiverse tokens + `.sidebar-ux-shell` / pin hosts — see [custom-css.md](custom-css.md)
+
+## Lumiverse staging organization support
+
+- [Folder/divider specification](tab-folders-spec.md) — accepted behavior and visual constraints.
+- [Compatibility investigation](tab-folders-compatibility-report.md) — staging host changes and original failure evidence.
+- [Implementation and validation](tab-folders-implementation.md) — organization authority, native adapters, profile persistence, and verification limits.
+- [UI review and polish](tab-folders-ui-review.md) — corrected visual inconsistencies, editing races, and keyboard/touch behavior.

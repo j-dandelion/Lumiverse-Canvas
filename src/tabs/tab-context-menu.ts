@@ -14,6 +14,8 @@
 // menu item creation, positioning, and event handlers from the tab button
 // management logic.
 
+import { relocateOrganizationItem } from '../core/organization'
+import type { Side } from '../core/model'
 import { getTabSidebar } from '../tabs/assignment'
 import { getHost, getModel, dispatchMoveByLiveId, placementFirstMoveByLiveId } from '../recon/dispatch'
 import { getSettings, isOsModeEnabled } from '../settings/state'
@@ -36,6 +38,7 @@ export function __setShowAssignmentMenuForTest(fn: typeof _showAssignmentMenuOve
 }
 
 let _contextMenu: HTMLElement | null = null
+let _organizationDismiss: (() => void) | null = null
 // Tracks the element that originated the currently-open menu. Used to
 // ignore the synthesized click that browsers dispatch at the end of a
 // long-press — when that click lands on the same element that opened
@@ -43,6 +46,7 @@ let _contextMenu: HTMLElement | null = null
 let _lastContextMenuTarget: HTMLElement | null = null
 
 export function hideAssignmentMenu(): void {
+  _organizationDismiss?.(); _organizationDismiss = null
   if (_contextMenu) {
     _contextMenu.remove()
     _contextMenu = null
@@ -264,4 +268,21 @@ function createAssignmentContextMenuItem(label: string, onClick: () => void, opt
     hideAssignmentMenu()
   })
   return item
+}
+
+/** Organization menus identify real containers, never fabricated tab IDs. */
+export function showOrganizationMenu(x: number, y: number, side: Side, id: string, originatingTarget?: HTMLElement): void {
+  hideAssignmentMenu()
+  _contextMenu = createAssignmentContextMenu(); document.body.appendChild(_contextMenu)
+  _contextMenu.appendChild(createAssignmentContextMenuItem('Configure tabs', () => { void import('./configure-modal').then(m => m.openConfigureTabsModal(id.replace(/^(folder|divider):/, ''))) }))
+  if (getSettings().secondSidebarEnabled || side === 'secondary') _contextMenu.appendChild(createAssignmentContextMenuItem(side === 'primary' ? 'Move to second drawer' : 'Move to main drawer', () => {
+    const model = getModel(); if (!model) return
+    void import('./organization-actions').then(m => m.commitOrganization(org => relocateOrganizationItem(org, id, side === 'primary' ? 'secondary' : 'primary'))).catch(error => { void import('./organization-actions').then(m => m.showOrganizationError(error)) })
+  }))
+  _contextMenu.style.left = `${Math.max(8, x)}px`; _contextMenu.style.top = `${Math.max(8, y)}px`; _contextMenu.style.display = 'block'; _lastContextMenuTarget = originatingTarget ?? null
+  const outside = (event: Event) => { if (_contextMenu?.contains(event.target as Node)) return; hideAssignmentMenu() }
+  const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') hideAssignmentMenu() }
+  document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true)
+  _organizationDismiss = () => { document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true) }
+  requestAnimationFrame(() => { if (!_contextMenu) return; const rect = _contextMenu.getBoundingClientRect(); if (rect.right > window.innerWidth) _contextMenu.style.left = `${Math.max(8, window.innerWidth - rect.width - 8)}px`; if (rect.bottom > window.innerHeight) _contextMenu.style.top = `${Math.max(8, window.innerHeight - rect.height - 8)}px` })
 }

@@ -63,12 +63,14 @@ export const SECONDARY_MOBILE_CSS = `
   }
   /* Tab buttons: uniform width on mobile horizontal layout.
      Matches main sidebar's mobile tabBtnLabeled size (52×48). */
+  .sidebar-ux-tab-list button.canvas-folder-button,
   .sidebar-ux-tab-list button[data-tab-id] {
     width: 52px !important;
     min-width: 0;
     flex-shrink: 0;
     padding: 6px 4px !important;
   }
+  .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-labeled,
   .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-labeled {
     width: 52px !important;
     height: 48px !important;
@@ -103,8 +105,11 @@ export const SECONDARY_MOBILE_CSS = `
      .sidebar-ux-side-left specificity and use !important —
      desktop rules set inset 3px/–3px with !important and
      would otherwise win. */
+  .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-secondary-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-secondary-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-secondary-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
     border-radius: 8px 8px 0 0 !important;
@@ -268,8 +273,11 @@ export const MAIN_MIRROR_MOBILE_CSS = `
   /* Active tab: bottom underline on mobile. Must beat the desktop
      .sidebar-ux-side-left/right inset rules → same shape as the
      secondary block (wrapper-scoped + !important). */
+  .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-main-mirror-wrapper .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-left .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+  .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
   .sidebar-ux-main-mirror-wrapper.sidebar-ux-side-right .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active {
     box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
     border-radius: 8px 8px 0 0 !important;
@@ -483,7 +491,9 @@ html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"][data-pin-owner="sec
    must never stretch it. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id],
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start],
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-canvas-os-start] {
@@ -693,11 +703,13 @@ html.sidebar-ux-start-edge-inner.${LOCATION_CLASS_BOTTOM} [data-strip-axis="hori
 /* Active indicator on the panel-facing side: top-edge strip -> bottom inset,
    bottom-edge strip -> top inset. */
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
 html.${LOCATION_CLASS_TOP} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
   box-shadow: inset 0 -3px 0 var(--lumiverse-primary) !important;
   border-radius: 8px 8px 0 0 !important;
 }
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button[data-tab-id].sidebar-ux-tab-active,
+html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.canvas-folder-button.sidebar-ux-tab-active,
 html.${LOCATION_CLASS_BOTTOM} [data-strip-axis="horizontal"] .sidebar-ux-tab-list button.sidebar-ux-main-tab-mirror-btn.sidebar-ux-tab-active {
   box-shadow: inset 0 3px 0 var(--lumiverse-primary) !important;
   border-radius: 0 0 8px 8px !important;

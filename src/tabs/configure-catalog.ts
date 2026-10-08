@@ -18,14 +18,14 @@ import { CORE_HIDE_LOCKED, isCoreTabId } from './core-tabs'
 export { CORE_HIDE_LOCKED } from './core-tabs'
 
 /** Opaque version string bumped when the source-of-truth set/order changes. */
-export const BUILTIN_CATALOG_VERSION = 'lumiverse-drawer-tabs-2026-07'
+export const BUILTIN_CATALOG_VERSION = 'lumiverse-staging-drawer-tabs-c975b917'
 
 /** Lumiverse DRAWER_TABS built-in ids, in host order. */
 export const BUILTIN_TAB_IDS: readonly string[] = [
   'profile', 'presets', 'loom', 'weaver', 'connections', 'browser',
   'characters', 'personas', 'multiplayer', 'lorebook', 'cortex',
-  'databank', 'create', 'ooc', 'prompt', 'council', 'summary',
-  'feedback', 'worldinfo', 'imagegen', 'wallpaper', 'regex',
+  'databank', 'create', 'prompt', 'council', 'summary',
+  'worldinfo', 'imagegen', 'wallpaper', 'regex',
   'branches', 'theme', 'spindle',
 ]
 
@@ -47,7 +47,7 @@ export type CatalogTab = {
 const BUILTIN_TAB_TITLES: Record<string, string> = {
   profile: 'Profile',
   presets: 'Reasoning',
-  loom: 'Loom',
+  loom: 'Presets',
   weaver: 'Weaver',
   connections: 'Connections',
   browser: 'Pack Browser',

@@ -1,5 +1,7 @@
 import type { LayoutModel, TabKey, Side, DrawerSide } from '../core/model'
 import { createEmptyModel, builtinKey, extensionKey, parseBuiltinKey, parseExtensionKey, isBuiltinKey } from '../core/model'
+import { sanitizeOrganization, normalizeOrganization, references, organizationFor, folderFor, projectNativeOrganization } from '../core/organization'
+import type { Organization } from '../core/organization'
 import { stripTabIdSuffix } from './tab-id-heal'
 
 /**
@@ -15,6 +17,15 @@ interface StoredTab {
  * The legacy layout blob format (subset of what snapshotLayout produces).
  */
 export interface LegacyLayout {
+  organization?: Organization
+  folderBrowser?: LayoutModel['folderBrowser']
+  rememberedLeaf?: LayoutModel['rememberedLeaf']
+  closeHidden?: readonly string[]
+  /** Stable state survives temporary extension unavailability. */
+  leafState?: { hidden: readonly TabKey[]; menuHidden: readonly TabKey[]; closed: readonly TabKey[] }
+  nativeOrganizationBaseline?: string
+  nativeOrganizationProjection?: string
+  nativeAddresses?: Readonly<Record<TabKey, string>>
   version?: string
   primary?: { open?: boolean; width?: number; tabId?: string }
   secondary?: { open?: boolean; width?: number; activeTabId?: string }
@@ -96,6 +107,14 @@ export function buildModelFromLayout(
     }
   }
 
+  const organization = layout.organization ? sanitizeOrganization(layout.organization) : undefined
+  if (organization) {
+    for (const side of ['primary', 'secondary'] as const) for (const ref of references(organization[side])) {
+      if (!ref.key) continue
+      const key = resolveStoredId(ref.key, findKey) ?? ref.key
+      if (key) appendOnce(side === 'primary' ? primary : secondary, key)
+    }
+  }
   // Hidden tab ids → hidden TabKeys
   const hidden: TabKey[] = []
   for (const storedId of (layout.hiddenTabIds ?? [])) {
@@ -127,6 +146,13 @@ export function buildModelFromLayout(
     }
   }
 
+  for (const [field, target] of [['hidden', hidden], ['menuHidden', menuHidden], ['closed', closed]] as const) {
+    for (const stored of layout.leafState?.[field] ?? []) {
+      const key = resolveStoredId(stored, findKey) ?? stored
+      if ((primary.includes(key) || secondary.includes(key)) && !target.includes(key)) target.push(key)
+    }
+  }
+
   // Active tabs
   const activePrimaryCandidate = layout.primary?.tabId
     ? resolveStoredId(layout.primary.tabId, findKey)
@@ -147,7 +173,18 @@ export function buildModelFromLayout(
   const secondaryOpen = layout.secondary?.open ?? false
   const secondaryWidth = layout.secondary?.width ?? 420
 
-  return {
+  const restored = {
+    ...(organization ? { organization } : {}),
+    ...(layout.folderBrowser ? { folderBrowser: layout.folderBrowser } : {}),
+    ...(layout.rememberedLeaf ? { rememberedLeaf: Object.fromEntries((['primary', 'secondary'] as const).map(side => { const key = layout.rememberedLeaf?.[side]; return [side, key ? resolveStoredId(key, findKey) ?? key : null] })) as LayoutModel['rememberedLeaf'] } : {}),
+    // Legacy core close wrote hidden as well. Treat that overlap as a close
+    // until a manual Configure edit records its own hide intent.
+    closeHidden: layout.closeHidden ? layout.closeHidden.map(key => resolveStoredId(key, findKey) ?? key).filter(key => hidden.includes(key)) : hidden.filter(key => closed.includes(key)),
+    ...(layout.nativeAddresses ? { nativeAddresses: layout.nativeAddresses } : {}),
+    ...(layout.nativeOrganizationBaseline ? { nativeOrganizationBaseline: layout.nativeOrganizationBaseline } : {}),
+  }
+  let result: LayoutModel = {
+    ...restored,
     version: 2,
     primary,
     secondary,
@@ -164,6 +201,22 @@ export function buildModelFromLayout(
     },
     side: layout.drawerSide ?? side ?? 'left',
   }
+  if (result.organization) result = { ...result, organization: normalizeOrganization(result) }
+  const selected = { ...(result.folderBrowser ?? { primary: null, secondary: null }) }
+  for (const side of ['primary', 'secondary'] as const) {
+    if (!selected[side]) continue
+    if (folderFor(result, side, selected[side])) result = { ...result, active: { ...result.active, [side]: null } }
+    else {
+      selected[side] = null
+      const remembered = result.rememberedLeaf?.[side]
+      const fallback = remembered && result[side].includes(remembered) && !hidden.includes(remembered) && !closed.includes(remembered)
+        ? remembered : result[side].find(key => !hidden.includes(key) && !closed.includes(key)) ?? null
+      result = { ...result, active: { ...result.active, [side]: fallback } }
+    }
+  }
+  if (layout.folderBrowser) result = { ...result, folderBrowser: selected }
+  return result
+
 }
 
 /**
@@ -183,6 +236,7 @@ export function serializeModelToSingleLayout(
 ): LegacyLayout {
   return {
     version,
+    ...organizationFields(model, resolve),
     primary: {
       open: model.drawers.primary.open,
       width: model.drawers.primary.width,
@@ -190,6 +244,7 @@ export function serializeModelToSingleLayout(
     },
     secondary: { open: false, width: 420, activeTabId: undefined },
     detachedTabs: [],
+    ...(model.organization ? { organization: { version: 1 as const, primary: [...organizationFor(model).primary, ...organizationFor(model).secondary], secondary: [] }, folderBrowser: { primary: model.folderBrowser?.primary ?? model.folderBrowser?.secondary ?? null, secondary: null } } : {}),
     // Fold: secondary keys appended after the primary keys, serialized as
     // live ids exactly like a dual serialization's tabOrder.
     tabOrder: resolveList([...model.primary, ...model.secondary], resolve),
@@ -222,6 +277,7 @@ export function foldLayoutToSingleShape(layout: LegacyLayout): LegacyLayout {
   }
   return {
     ...layout,
+    ...(layout.organization ? { organization: { version: 1 as const, primary: [...layout.organization.primary, ...layout.organization.secondary], secondary: [] }, folderBrowser: { primary: layout.folderBrowser?.primary ?? layout.folderBrowser?.secondary ?? null, secondary: null } } : {}),
     secondary: { open: false, width: 420, activeTabId: undefined },
     detachedTabs: [],
     tabOrder: order,
@@ -326,6 +382,7 @@ export function serializeModelToLayout(
 
   return {
     version,
+    ...organizationFields(model, resolve),
     primary: {
       open: model.drawers.primary.open,
       width: model.drawers.primary.width,
@@ -350,4 +407,16 @@ function resolveList(
   resolve: (key: TabKey) => string | null,
 ): string[] {
   return keys.map(key => resolve(key)).filter(Boolean) as string[]
+}
+
+function organizationFields(model: LayoutModel, resolve: (key: TabKey) => string | null): Partial<LegacyLayout> {
+  const nativeAddresses = { ...model.nativeAddresses }
+  for (const key of [...model.primary, ...model.secondary]) { const id = resolve(key); if (id) nativeAddresses[key] = id }
+  return {
+    ...(model.organization ? { nativeOrganizationProjection: JSON.stringify(projectNativeOrganization(normalizeOrganization(model), key => resolve(key) ?? nativeAddresses[key] ?? null)), nativeAddresses, organization: normalizeOrganization(model), leafState: { hidden: model.hidden, menuHidden: model.menuHidden, closed: model.closed } } : {}),
+    ...(model.folderBrowser ? { folderBrowser: model.folderBrowser } : {}),
+    ...(model.rememberedLeaf ? { rememberedLeaf: model.rememberedLeaf } : {}),
+    ...(model.closeHidden ? { closeHidden: model.closeHidden } : {}),
+    ...(model.nativeOrganizationBaseline ? { nativeOrganizationBaseline: model.nativeOrganizationBaseline } : {}),
+  }
 }

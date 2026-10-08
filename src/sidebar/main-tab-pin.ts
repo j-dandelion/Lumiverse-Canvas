@@ -1,3 +1,4 @@
+import { navigateHostTab } from '../tabs/host-navigation'
 // Main-drawer "keep tab controls visible" — pin chrome + orchestration.
 //
 // S2 (2026-09): the mirror TAB STRIP is rendered by main-renderer.ts from
@@ -352,7 +353,8 @@ export function activateMainMirrorFromRestore(
     undefined
   if (hostBtn && hostBtn.isConnected) {
     try {
-      hostBtn.click()
+      if (hostBtn.getAttribute('aria-hidden') === 'true') navigateHostTab(hostBtn.getAttribute('data-tab-id') ?? '', hostBtn)
+      else hostBtn.click()
     } catch {
       /* host may throw during teardown */
     }

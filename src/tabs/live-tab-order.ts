@@ -37,7 +37,7 @@ export function readVisibleTabIdsFromList(list: HTMLElement | null): string[] {
     if (isSettingsButton(el)) continue
     // Hidden tabs keep display:none via applyHiddenTabIds*; omit so
     // alignIdsToLiveVisibleOrder can park them via hiddenIds slots.
-    if (el.style?.display === 'none') continue
+    if (el.style?.display === 'none' || el.getAttribute('aria-hidden') === 'true' || el.hasAttribute?.('data-canvas-folder-member')) continue
     const hasAttr = el.getAttribute('data-tab-id') !== null
     const id = buttonTabId(el)
     if (id) {

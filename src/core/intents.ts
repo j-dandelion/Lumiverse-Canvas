@@ -1,9 +1,13 @@
+import type { Organization } from './organization'
 import type { TabKey, Side, DrawerSide, ObservedWorld } from './model'
 
 export type Intent =
+  | { readonly t: 'setOrganization'; readonly organization: Organization }
+  | { readonly t: 'browseFolder'; readonly side: Side; readonly id: string | null }
+
   | { readonly t: 'move';        readonly key: TabKey; readonly to: Side; readonly index: number; readonly activateDest: boolean }
   | { readonly t: 'reorder';     readonly key: TabKey; readonly side: Side; readonly index: number }
-  | { readonly t: 'setHidden';   readonly key: TabKey; readonly hidden: boolean }
+  | { readonly t: 'setHidden';   readonly key: TabKey; readonly hidden: boolean; readonly origin?: 'close' }
   | { readonly t: 'setMenuHidden'; readonly key: TabKey; readonly hidden: boolean }
   | { readonly t: 'setClosed';   readonly key: TabKey; readonly closed: boolean }
   | { readonly t: 'activate';    readonly key: TabKey; readonly side: Side }

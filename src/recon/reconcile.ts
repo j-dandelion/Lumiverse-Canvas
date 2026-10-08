@@ -154,6 +154,7 @@ function diffActive(
   resolved: Map<TabKey, LiveTabId>,
   world: ObservedWorld,
 ): LiveTabId | null {
+  if (model.folderBrowser?.[side]) return null
   const modelActive = model.active[side]
   if (!modelActive) return null
 
