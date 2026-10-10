@@ -16022,7 +16022,7 @@ var init_tab_context_menu = __esm(() => {
 
 // src/tabs/organization-drag.ts
 function isOrganizationDragActive() {
-  return activeDrag !== null;
+  return activeDrag?.started === true;
 }
 function mainSurface() {
   const list = getMainMirrorTabList();
@@ -16433,6 +16433,8 @@ function makeSession(source, id, item, from, event) {
       return;
     ev.preventDefault();
     ev.stopImmediatePropagation();
+    if (session.started)
+      suppressClickUntil = Date.now() + 250;
     session.cancel = true;
     finishSession(session, true);
   };

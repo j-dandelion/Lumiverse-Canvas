@@ -70,7 +70,7 @@ const flipTokens = new WeakMap<HTMLElement, number>()
 
 /** The folder strip shares Canvas 2.0's live tab drag visuals and gestures. */
 export function isOrganizationDragActive(): boolean {
-  return activeDrag !== null
+  return activeDrag?.started === true
 }
 
 function mainSurface(): HTMLElement | null {
@@ -469,6 +469,7 @@ function makeSession(source: HTMLElement, id: string, item: OrganizationItem, fr
   session.key = (ev: KeyboardEvent) => {
     if (ev.key !== 'Escape') return
     ev.preventDefault(); ev.stopImmediatePropagation()
+    if (session.started) suppressClickUntil = Date.now() + 250
     session.cancel = true
     finishSession(session, true)
   }
