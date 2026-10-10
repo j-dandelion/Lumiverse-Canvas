@@ -11,7 +11,7 @@ import { getSettings, isOsModeEnabled } from '../settings/state'
 import { isGhostPresentationPending } from './ghost-presentation'
 import { folderIconSvg } from './folder-icons'
 import { observeExplicitHostNavigation } from './host-navigation'
-import { installOrganizationDrag } from './organization-drag'
+import { installOrganizationDrag, isOrganizationDragActive } from './organization-drag'
 import { currentLifecycleGeneration, isLifecycleCurrent } from '../lifecycle/instance'
 
 let stop: (() => void) | null = null
@@ -50,7 +50,6 @@ export function injectFolderStyles(): void {
     .canvas-folder-empty { padding:24px 12px;text-align:center; }
     [data-canvas-folder-browser] [data-canvas-os-minimize] { display:none !important; }
     .canvas-folder-button:focus-visible,.canvas-folder-child:focus-visible,.canvas-folder-toolbar button:focus-visible { outline:2px solid var(--lumiverse-primary);outline-offset:-2px; }
-    .canvas-organization-drag-source { opacity:.35; }
     .canvas-organization-error { position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:12000;padding:12px 16px;border:1px solid var(--lumiverse-border);border-radius:8px;background:var(--lumiverse-bg);color:var(--lumiverse-text); }
     .canvas-organization-insert-before { box-shadow:inset 0 2px var(--lumiverse-primary); }
     .canvas-organization-insert-after { box-shadow:inset 0 -2px var(--lumiverse-primary); }
@@ -111,21 +110,30 @@ export function renderOrganizationStrip(side: Side): void {
   const list = side === 'primary' ? getMainMirrorTabList() : getSecondaryTabList(); if (!list) return
   const main = list.querySelector<HTMLElement>('.sidebar-ux-tab-list-main') ?? list
   const buttons = Array.from(main.querySelectorAll<HTMLElement>('button[data-tab-id]'))
+  const sideOrganization = organizationFor(model)[side]
   for (const button of buttons) {
     const live = button.getAttribute('data-tab-id'), key = live ? host.findKey(live) : null
     if (key) button.classList.toggle('sidebar-ux-tab-active', model.drawers[side].open && model.active[side] === key)
-    if (key && folderContaining(model, side, key)) button.setAttribute('data-canvas-folder-member', '')
-    else button.removeAttribute('data-canvas-folder-member')
+    if (key && folderContaining(model, side, key)) {
+      button.setAttribute('data-canvas-folder-member', '')
+      button.removeAttribute('data-canvas-organization')
+    } else {
+      button.removeAttribute('data-canvas-folder-member')
+      const root = sideOrganization.find(item => item.type === 'tab' && item.key === key)
+      if (root) button.setAttribute('data-canvas-organization', itemId(root))
+      else button.removeAttribute('data-canvas-organization')
+    }
   }
   const desired: HTMLElement[] = []
   const wanted = new Set<string>()
   for (const item of organizationFor(model)[side]) {
+    const id = itemId(item)
     if (item.type === 'tab') {
       const button = buttons.find(btn => item.key && host.findKey(btn.getAttribute('data-tab-id') ?? '') === item.key)
-      if (button) desired.push(button)
+      if (button) { button.setAttribute('data-canvas-organization', id); desired.push(button) }
       continue
     }
-    const id = itemId(item); wanted.add(id)
+    wanted.add(id)
     let node = Array.from(main.children).find(el => el.getAttribute('data-canvas-organization') === id) as HTMLElement | undefined
     if (!node) {
       node = document.createElement(item.type === 'folder' ? 'button' : 'div'); node.setAttribute('data-canvas-organization', id)
@@ -229,7 +237,7 @@ export function renderFolders(): void {
 export function mountFolders(): () => void {
   const generation = currentLifecycleGeneration()
   observed = new WeakSet<Element>()
-  const schedule = () => { if (scheduled) return; scheduled = true; queueMicrotask(() => { scheduled = false; if (isLifecycleCurrent(generation)) { const model = getModel(); if (model && !model.organization) void dispatch({ t: 'setOrganization', organization: organizationFor(model) }); else renderFolders() } }) }
+  const schedule = () => { if (isOrganizationDragActive() || scheduled) return; scheduled = true; queueMicrotask(() => { scheduled = false; if (!isOrganizationDragActive() && isLifecycleCurrent(generation)) { const model = getModel(); if (model && !model.organization) void dispatch({ t: 'setOrganization', organization: organizationFor(model) }); else renderFolders() } }) }
   const stopNavigation = observeExplicitHostNavigation()
   const stopDrag = installOrganizationDrag()
   stop?.(); stop = onModelChanged(schedule)

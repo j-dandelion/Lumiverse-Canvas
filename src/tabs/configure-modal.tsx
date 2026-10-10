@@ -75,6 +75,7 @@ let _organizationFolderDwell: ReturnType<typeof setTimeout> | null = null
 let _organizationFolderDwellId: string | null = null
 let _organizationFlipGeneration = 0
 const _organizationFlipTokens = new WeakMap<HTMLElement, number>()
+let _tabFlipGeneration = 0
 let _dragActive = false
 let _dragOverlay: HTMLElement | null = null
 let _dragOffsetX = 0
@@ -85,6 +86,8 @@ let _lastDropTarget: { side: 'primary' | 'secondary'; index: number } | null = n
 let _flipRects: Map<string, DOMRect> | null = null
 let _dragMoveHandler: ((e: PointerEvent) => void) | null = null
 let _dragUpHandler: ((e: PointerEvent) => void) | null = null
+/** One frame at a time for overlay motion and its hit-test. */
+let _dragRafId: number | null = null
 /** In-flight drop-settle timeout (transitionend fallback). */
 let _settleTimer: ReturnType<typeof setTimeout> | null = null
 let _settleCompletion: (() => void) | null = null
@@ -350,14 +353,13 @@ function injectModalStyles(): void {
       color: var(--lumiverse-text, #eee);
       font-family: var(--lumiverse-font-family, sans-serif);
       opacity: 1;
-      will-change: left, top;
+      will-change: transform;
       cursor: grabbing;
     }
     /* Drop settle: floating clone eases into its destination row slot (matches live tab-list DnD). */
     .canvas-configure-tabs-overlay-clone.canvas-configure-tabs-overlay-settling {
       transition:
-        left ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
-        top ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
+        transform ${SETTLE_DURATION_MS}ms cubic-bezier(0.25, 1, 0.5, 1),
         box-shadow ${SETTLE_DURATION_MS}ms ease,
         opacity ${SETTLE_DURATION_MS}ms ease !important;
       box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.35);
@@ -711,20 +713,20 @@ function resolveConfigureSettleDestination(tabId: string | null): { left: number
 }
 
 /**
- * Animate the floating overlay into its drop slot (same timing as live DnD).
- * Uses left/top (configure overlay position model), not translate3d.
+ * Animate the floating overlay into its drop slot. Position it with a
+ * compositor transform, matching Canvas 2.0's live drawer drag.
  */
 function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> {
   const overlay = _dragOverlay
   if (!overlay) return Promise.resolve()
 
-  const curLeft = parseFloat(overlay.style.left) || 0
-  const curTop = parseFloat(overlay.style.top) || 0
+  const current = overlay.style.transform.match(/translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/)
+  const curLeft = current ? Number(current[1]) : 0
+  const curTop = current ? Number(current[2]) : 0
   const dx = destLeft - curLeft
   const dy = destTop - curTop
   if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX) {
-    overlay.style.left = `${destLeft}px`
-    overlay.style.top = `${destTop}px`
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`
     return Promise.resolve()
   }
 
@@ -743,8 +745,7 @@ function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> 
     }
     const onEnd = (e: TransitionEvent) => {
       if (e.target !== overlay) return
-      // left and top both transition; complete on either once.
-      if (e.propertyName && e.propertyName !== 'left' && e.propertyName !== 'top') return
+      if (e.propertyName && e.propertyName !== 'transform') return
       finish()
     }
 
@@ -754,8 +755,7 @@ function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> 
     overlay.classList.add('canvas-configure-tabs-overlay-settling')
     // Ensure the settling class applies before changing position.
     void overlay.offsetWidth
-    overlay.style.left = `${destLeft}px`
-    overlay.style.top = `${destTop}px`
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`
     _settleTimer = setTimeout(finish, SETTLE_DURATION_MS + 40)
   })
 }
@@ -776,6 +776,10 @@ function cloneConfigureDraft(d: ConfigureDraft): ConfigureDraft {
 function clearDragState(): void {
   cancelOverlaySettle()
   stopAutoScroll()
+  if (_dragRafId !== null) {
+    cancelAnimationFrame(_dragRafId)
+    _dragRafId = null
+  }
   if (_dragOverlay) {
     _dragOverlay.remove()
     _dragOverlay = null
@@ -961,6 +965,26 @@ function runHitTestAndReorder(x: number, y: number): void {
   performDragMove(_dragTabId, target_.side, target_.index)
 }
 
+/** Move the float immediately; coalesce layout reads and preview rendering. */
+function positionConfigureDragOverlay(x: number, y: number): void {
+  _lastPointerX = x
+  _lastPointerY = y
+  if (_dragOverlay) {
+    _dragOverlay.style.transform = `translate3d(${x - _dragOffsetX}px, ${y - _dragOffsetY}px, 0)`
+  }
+}
+
+function scheduleConfigureDragFrame(): void {
+  if (_dragRafId !== null) return
+  _dragRafId = requestAnimationFrame(() => {
+    _dragRafId = null
+    if (!_dragActive || _settling) return
+    updateAutoScroll(_lastPointerX, _lastPointerY)
+    if (_organizationDragId) runOrganizationDragHitTest(_lastPointerX, _lastPointerY)
+    else runHitTestAndReorder(_lastPointerX, _lastPointerY)
+  })
+}
+
 /**
  * Snapshot row bounding rects keyed by data-tab-id for FLIP animation.
  */
@@ -979,8 +1003,16 @@ function snapshotFLIPRects(): Map<string, DOMRect> {
  * Do not re-measure after invert — that cancels the animation.
  */
 function applyFLIP(prevRects: Map<string, DOMRect>, excludeTabId: string | null): void {
+  // Rebase each reorder from the captured visible positions. Repeated pointer
+  // moves can arrive before the prior 200 ms transition ends.
+  const generation = ++_tabFlipGeneration
   const animated: HTMLElement[] = []
   const rows = document.querySelectorAll('.canvas-configure-tabs-row')
+  for (const el of rows) {
+    const node = el as HTMLElement
+    node.style.removeProperty('transition')
+    node.style.removeProperty('transform')
+  }
   for (const el of rows) {
     const id = el.getAttribute('data-tab-id')
     if (!id || id === excludeTabId || !prevRects.has(id)) continue
@@ -997,11 +1029,13 @@ function applyFLIP(prevRects: Map<string, DOMRect>, excludeTabId: string | null)
   // Force layout so the invert sticks before we animate
   void document.body.offsetHeight
   requestAnimationFrame(() => {
+    if (generation !== _tabFlipGeneration) return
     for (const node of animated) {
       node.style.transition = 'transform 200ms cubic-bezier(0.25, 1, 0.5, 1)'
       node.style.transform = ''
     }
     setTimeout(() => {
+      if (generation !== _tabFlipGeneration) return
       for (const node of animated) {
         node.style.transition = ''
       }
@@ -1021,7 +1055,16 @@ function snapshotOrganizationFLIPRects(): Map<string, DOMRect> {
 
 /** Animate organization rows with the same quick ease used by Canvas 2.0. */
 function applyOrganizationFLIP(prevRects: Map<string, DOMRect>, excludeId: string): void {
+  // A drag can cross several insertion zones before the prior 200 ms FLIP
+  // completes. Rebase from the captured on-screen rects instead of stacking
+  // a second transform on top of the first one.
+  const generation = ++_organizationFlipGeneration
   const current = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+  for (const node of current) {
+    node.style.removeProperty('transition')
+    node.style.removeProperty('transform')
+    _organizationFlipTokens.delete(node)
+  }
   const nextRects = new Map<string, DOMRect>()
   for (const el of current) {
     const id = el.getAttribute('data-organization-drag-id')
@@ -1055,8 +1098,10 @@ function applyOrganizationFLIP(prevRects: Map<string, DOMRect>, excludeId: strin
   }
   if (!animated.length) return
   void document.body.offsetHeight
-  const generation = ++_organizationFlipGeneration
   requestAnimationFrame(() => {
+    // A faster subsequent preview owns the current layout. Ignore an older
+    // queued animation frame instead of letting it overwrite its transforms.
+    if (generation !== _organizationFlipGeneration) return
     for (const node of animated) {
       _organizationFlipTokens.set(node, generation)
       node.style.transition = 'transform 200ms cubic-bezier(0.25, 1, 0.5, 1)'
@@ -1092,8 +1137,9 @@ function createOrganizationDragOverlay(id: string): HTMLElement | null {
   const rect = source.getBoundingClientRect()
   overlay.style.width = `${rect.width}px`
   overlay.style.height = `${rect.height}px`
-  overlay.style.left = `${rect.left}px`
-  overlay.style.top = `${rect.top}px`
+  overlay.style.left = '0px'
+  overlay.style.top = '0px'
+  overlay.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`
   // Keep the clone inert and out of all organization hit-tests/settle lookup.
   for (const el of [overlay, ...Array.from(overlay.querySelectorAll<HTMLElement>('*'))]) {
     el.removeAttribute('data-organization-ref')
@@ -1152,7 +1198,12 @@ function runOrganizationDragHitTest(x: number, y: number): void {
   const id = _organizationDragId
   const organization = _draftRef?.organization
   if (!id || !_dragActive || !organization || _settling) return
-  const pointed = document.elementFromPoint(x, y)
+  // Canvas 2.0 hit-tests the floating tab's center, not the pointer hotspot.
+  // This keeps insertion intent stable when the user grabs an outer edge.
+  const overlayRect = _dragOverlay?.getBoundingClientRect()
+  const hitX = overlayRect ? overlayRect.left + overlayRect.width / 2 : x
+  const hitY = overlayRect ? overlayRect.top + overlayRect.height / 2 : y
+  const pointed = document.elementFromPoint(hitX, hitY)
   const list = pointed?.closest<HTMLElement>('.canvas-configure-tabs-list[data-side]')
   const side = list?.getAttribute('data-side') as ColumnSide | null
   if (!list || (side !== 'primary' && side !== 'secondary')) return
@@ -1176,7 +1227,7 @@ function runOrganizationDragHitTest(x: number, y: number): void {
       const parent = hit.getAttribute('data-organization-parent') || undefined
       const targetItem = organization[side].find(item => itemId(item) === hitId)
       const rect = hit.getBoundingClientRect()
-      const fraction = rect.height ? (y - rect.top) / rect.height : 0.5
+      const fraction = rect.height ? (hitY - rect.top) / rect.height : 0.5
       if (!parent && targetItem?.type === 'folder' && source.item.type === 'tab' && fraction >= 0.3 && fraction <= 0.7) {
         const children = targetItem.children.filter(ref => referenceId(ref) !== id)
         destination = { side, index: children.length, folder: targetItem.id }
@@ -1244,8 +1295,9 @@ function createDragOverlay(sourceRow: HTMLElement): HTMLElement {
   const rect = sourceRow.getBoundingClientRect()
   overlay.style.width = rect.width + 'px'
   overlay.style.height = rect.height + 'px'
-  overlay.style.left = rect.left + 'px'
-  overlay.style.top = rect.top + 'px'
+  overlay.style.left = '0px'
+  overlay.style.top = '0px'
+  overlay.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`
   // Remove interactive elements from clone
   const toggle = overlay.querySelector('.canvas-configure-tabs-toggle')
   if (toggle) (toggle as HTMLElement).style.pointerEvents = 'none'
@@ -1548,20 +1600,17 @@ function ConfigureTabsModalInner(props: ModalProps) {
         }
       }
 
-      if (_dragOverlay) {
-        _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`
-        _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`
-      }
-
-      // Track the pointer for auto-scroll frames, then hit-test for a drop
-      // target (fromSide always resolved from live draft inside performDragMove).
-      _lastPointerX = ev.clientX
-      _lastPointerY = ev.clientY
-      updateAutoScroll(ev.clientX, ev.clientY)
-      runHitTestAndReorder(ev.clientX, ev.clientY)
+      // Overlay motion stays immediate and compositor-driven. DOM reads,
+      // auto-scroll checks, and preview rendering are coalesced to one frame.
+      positionConfigureDragOverlay(ev.clientX, ev.clientY)
+      scheduleConfigureDragFrame()
     }
 
-    const onUp = async (_ev: PointerEvent) => {
+    const onUp = async (upEvent: PointerEvent) => {
+      if (_dragActive) {
+        positionConfigureDragOverlay(upEvent.clientX, upEvent.clientY)
+        runHitTestAndReorder(upEvent.clientX, upEvent.clientY)
+      }
       // Stop tracking pointer + auto-scroll; keep overlay + placeholder for
       // settle anim.
       detachDragListeners()
@@ -1584,7 +1633,7 @@ function ConfigureTabsModalInner(props: ModalProps) {
 
     _dragMoveHandler = onMove
     _dragUpHandler = onUp
-    document.addEventListener('pointermove', onMove, { passive: true })
+    document.addEventListener('pointermove', onMove, { passive: false })
     document.addEventListener('pointerup', onUp)
     document.addEventListener('pointercancel', onUp)
   }, [])
@@ -1623,17 +1672,15 @@ function ConfigureTabsModalInner(props: ModalProps) {
         _dragOverlay = createOrganizationDragOverlay(id)
       }
 
-      if (_dragOverlay) {
-        _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`
-        _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`
-      }
-      _lastPointerX = ev.clientX
-      _lastPointerY = ev.clientY
-      updateAutoScroll(ev.clientX, ev.clientY)
-      runOrganizationDragHitTest(ev.clientX, ev.clientY)
+      positionConfigureDragOverlay(ev.clientX, ev.clientY)
+      scheduleConfigureDragFrame()
     }
 
-    const onUp = async () => {
+    const onUp = async (upEvent: PointerEvent) => {
+      if (_dragActive) {
+        positionConfigureDragOverlay(upEvent.clientX, upEvent.clientY)
+        runOrganizationDragHitTest(upEvent.clientX, upEvent.clientY)
+      }
       detachDragListeners()
       stopAutoScroll()
       if (!_dragActive) {

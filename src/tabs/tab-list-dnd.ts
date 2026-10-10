@@ -340,7 +340,7 @@ let _flipActiveTimer: ReturnType<typeof setTimeout> | null = null
 
 const DND_STYLE_ID = 'canvas-tab-list-dnd-styles'
 
-function injectDndStyles(): void {
+export function injectDndStyles(): void {
   if (typeof document === 'undefined') return
   if (document.getElementById(DND_STYLE_ID)) return
 

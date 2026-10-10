@@ -707,11 +707,11 @@ function createEmptyModel(side = "left") {
 var BUILTIN_PREFIX = "builtin:", EXT_PREFIX = "ext:";
 
 // src/core/organization.ts
-function referenceId2(ref) {
+function referenceId(ref) {
   return ref.key ?? `address:${ref.tabId}`;
 }
 function itemId(item) {
-  return item.type === "tab" ? referenceId2(item) : `${item.type}:${item.id}`;
+  return item.type === "tab" ? referenceId(item) : `${item.type}:${item.id}`;
 }
 function references(items) {
   return items.flatMap((item) => item.type === "tab" ? [item] : item.type === "folder" ? [...item.children] : []);
@@ -734,9 +734,9 @@ function sanitizeOrganization(raw) {
       return null;
     const r = value;
     const ref = typeof r.key === "string" && /^(builtin:|ext:)/.test(r.key) ? { key: r.key } : typeof r.tabId === "string" && r.tabId ? { tabId: r.tabId } : null;
-    if (!ref || seen.has(referenceId2(ref)))
+    if (!ref || seen.has(referenceId(ref)))
       return null;
-    seen.add(referenceId2(ref));
+    seen.add(referenceId(ref));
     return ref;
   };
   const read = (value) => {
@@ -800,7 +800,7 @@ function relocateOrganizationItem(org, id, to, index = -1, folderId) {
     if (item2.type !== "folder")
       return [item2];
     return [{ ...item2, children: item2.children.filter((ref) => {
-      if (referenceId2(ref) !== id)
+      if (referenceId(ref) !== id)
         return true;
       moved = { type: "tab", ...ref };
       return false;
@@ -5162,7 +5162,7 @@ function ConfigureOrganization(props) {
     }, undefined, true, undefined, this);
   };
   const leaf = (ref, index, parent) => {
-    const id = referenceId2(ref), liveId = ref.key ? getHost()?.resolve(ref.key) : ref.tabId;
+    const id = referenceId(ref), liveId = ref.key ? getHost()?.resolve(ref.key) : ref.tabId;
     const tab = tabs.find((tab2) => tab2.id === liveId);
     return /* @__PURE__ */ u3("div", {
       class: `canvas-organization-leaf${parent ? " canvas-organization-child" : ""}`,
@@ -11759,6 +11759,7 @@ __export(exports_tab_list_dnd, {
   invalidateDndGeometry: () => invalidateDndGeometry,
   installTabListDnd: () => installTabListDnd,
   insertIndexFromMidpoints: () => insertIndexFromMidpoints,
+  injectDndStyles: () => injectDndStyles,
   flipDelta: () => flipDelta,
   dragHitGeometry: () => dragHitGeometry,
   domInsertIndexFromVisibleIndex: () => domInsertIndexFromVisibleIndex,
@@ -14001,14 +14002,13 @@ function injectModalStyles() {
       color: var(--lumiverse-text, #eee);
       font-family: var(--lumiverse-font-family, sans-serif);
       opacity: 1;
-      will-change: left, top;
+      will-change: transform;
       cursor: grabbing;
     }
     /* Drop settle: floating clone eases into its destination row slot (matches live tab-list DnD). */
     .canvas-configure-tabs-overlay-clone.canvas-configure-tabs-overlay-settling {
       transition:
-        left ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
-        top ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
+        transform ${SETTLE_DURATION_MS2}ms cubic-bezier(0.25, 1, 0.5, 1),
         box-shadow ${SETTLE_DURATION_MS2}ms ease,
         opacity ${SETTLE_DURATION_MS2}ms ease !important;
       box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.35);
@@ -14353,13 +14353,13 @@ function animateOverlaySettle2(destLeft, destTop) {
   const overlay = _dragOverlay;
   if (!overlay)
     return Promise.resolve();
-  const curLeft = parseFloat(overlay.style.left) || 0;
-  const curTop = parseFloat(overlay.style.top) || 0;
+  const current = overlay.style.transform.match(/translate3d\((-?[\d.]+)px,\s*(-?[\d.]+)px/);
+  const curLeft = current ? Number(current[1]) : 0;
+  const curTop = current ? Number(current[2]) : 0;
   const dx = destLeft - curLeft;
   const dy = destTop - curTop;
   if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX2) {
-    overlay.style.left = `${destLeft}px`;
-    overlay.style.top = `${destTop}px`;
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
     return Promise.resolve();
   }
   return new Promise((resolve) => {
@@ -14379,7 +14379,7 @@ function animateOverlaySettle2(destLeft, destTop) {
     const onEnd = (e3) => {
       if (e3.target !== overlay)
         return;
-      if (e3.propertyName && e3.propertyName !== "left" && e3.propertyName !== "top")
+      if (e3.propertyName && e3.propertyName !== "transform")
         return;
       finish();
     };
@@ -14388,8 +14388,7 @@ function animateOverlaySettle2(destLeft, destTop) {
     overlay.addEventListener("transitionend", onEnd);
     overlay.classList.add("canvas-configure-tabs-overlay-settling");
     overlay.offsetWidth;
-    overlay.style.left = `${destLeft}px`;
-    overlay.style.top = `${destTop}px`;
+    overlay.style.transform = `translate3d(${destLeft}px, ${destTop}px, 0)`;
     _settleTimer2 = setTimeout(finish, SETTLE_DURATION_MS2 + 40);
   });
 }
@@ -14407,6 +14406,10 @@ function cloneConfigureDraft(d3) {
 function clearDragState2() {
   cancelOverlaySettle2();
   stopAutoScroll();
+  if (_dragRafId !== null) {
+    cancelAnimationFrame(_dragRafId);
+    _dragRafId = null;
+  }
   if (_dragOverlay) {
     _dragOverlay.remove();
     _dragOverlay = null;
@@ -14551,6 +14554,27 @@ function runHitTestAndReorder(x2, y3) {
   _lastDropTarget = target_;
   performDragMove(_dragTabId, target_.side, target_.index);
 }
+function positionConfigureDragOverlay(x2, y3) {
+  _lastPointerX = x2;
+  _lastPointerY = y3;
+  if (_dragOverlay) {
+    _dragOverlay.style.transform = `translate3d(${x2 - _dragOffsetX}px, ${y3 - _dragOffsetY}px, 0)`;
+  }
+}
+function scheduleConfigureDragFrame() {
+  if (_dragRafId !== null)
+    return;
+  _dragRafId = requestAnimationFrame(() => {
+    _dragRafId = null;
+    if (!_dragActive || _settling)
+      return;
+    updateAutoScroll(_lastPointerX, _lastPointerY);
+    if (_organizationDragId)
+      runOrganizationDragHitTest(_lastPointerX, _lastPointerY);
+    else
+      runHitTestAndReorder(_lastPointerX, _lastPointerY);
+  });
+}
 function snapshotFLIPRects() {
   const rects = new Map;
   for (const el of document.querySelectorAll(".canvas-configure-tabs-row")) {
@@ -14561,8 +14585,14 @@ function snapshotFLIPRects() {
   return rects;
 }
 function applyFLIP2(prevRects, excludeTabId) {
+  const generation = ++_tabFlipGeneration;
   const animated = [];
   const rows = document.querySelectorAll(".canvas-configure-tabs-row");
+  for (const el of rows) {
+    const node = el;
+    node.style.removeProperty("transition");
+    node.style.removeProperty("transform");
+  }
   for (const el of rows) {
     const id = el.getAttribute("data-tab-id");
     if (!id || id === excludeTabId || !prevRects.has(id))
@@ -14581,11 +14611,15 @@ function applyFLIP2(prevRects, excludeTabId) {
     return;
   document.body.offsetHeight;
   requestAnimationFrame(() => {
+    if (generation !== _tabFlipGeneration)
+      return;
     for (const node of animated) {
       node.style.transition = "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)";
       node.style.transform = "";
     }
     setTimeout(() => {
+      if (generation !== _tabFlipGeneration)
+        return;
       for (const node of animated) {
         node.style.transition = "";
       }
@@ -14602,7 +14636,13 @@ function snapshotOrganizationFLIPRects() {
   return rects;
 }
 function applyOrganizationFLIP(prevRects, excludeId) {
+  const generation = ++_organizationFlipGeneration;
   const current = Array.from(document.querySelectorAll("[data-organization-drag-id]"));
+  for (const node of current) {
+    node.style.removeProperty("transition");
+    node.style.removeProperty("transform");
+    _organizationFlipTokens.delete(node);
+  }
   const nextRects = new Map;
   for (const el of current) {
     const id = el.getAttribute("data-organization-drag-id");
@@ -14639,8 +14679,9 @@ function applyOrganizationFLIP(prevRects, excludeId) {
   if (!animated.length)
     return;
   document.body.offsetHeight;
-  const generation = ++_organizationFlipGeneration;
   requestAnimationFrame(() => {
+    if (generation !== _organizationFlipGeneration)
+      return;
     for (const node of animated) {
       _organizationFlipTokens.set(node, generation);
       node.style.transition = "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)";
@@ -14673,8 +14714,9 @@ function createOrganizationDragOverlay(id) {
   const rect = source.getBoundingClientRect();
   overlay.style.width = `${rect.width}px`;
   overlay.style.height = `${rect.height}px`;
-  overlay.style.left = `${rect.left}px`;
-  overlay.style.top = `${rect.top}px`;
+  overlay.style.left = "0px";
+  overlay.style.top = "0px";
+  overlay.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
   for (const el of [overlay, ...Array.from(overlay.querySelectorAll("*"))]) {
     el.removeAttribute("data-organization-ref");
     el.removeAttribute("data-organization-drag-id");
@@ -14704,7 +14746,7 @@ function organizationLocation(organization, id) {
     for (const folder of root) {
       if (folder.type !== "folder")
         continue;
-      const childIndex = folder.children.findIndex((ref) => referenceId2(ref) === id);
+      const childIndex = folder.children.findIndex((ref) => referenceId(ref) === id);
       if (childIndex >= 0)
         return { side, parent: folder.id, index: childIndex, item: { type: "tab", ...folder.children[childIndex] } };
     }
@@ -14739,7 +14781,10 @@ function runOrganizationDragHitTest(x2, y3) {
   const organization = _draftRef?.organization;
   if (!id || !_dragActive || !organization || _settling)
     return;
-  const pointed = document.elementFromPoint(x2, y3);
+  const overlayRect = _dragOverlay?.getBoundingClientRect();
+  const hitX = overlayRect ? overlayRect.left + overlayRect.width / 2 : x2;
+  const hitY = overlayRect ? overlayRect.top + overlayRect.height / 2 : y3;
+  const pointed = document.elementFromPoint(hitX, hitY);
   const list = pointed?.closest(".canvas-configure-tabs-list[data-side]");
   const side = list?.getAttribute("data-side");
   if (!list || side !== "primary" && side !== "secondary")
@@ -14761,9 +14806,9 @@ function runOrganizationDragHitTest(x2, y3) {
       const parent = hit.getAttribute("data-organization-parent") || undefined;
       const targetItem = organization[side].find((item) => itemId(item) === hitId);
       const rect = hit.getBoundingClientRect();
-      const fraction = rect.height ? (y3 - rect.top) / rect.height : 0.5;
+      const fraction = rect.height ? (hitY - rect.top) / rect.height : 0.5;
       if (!parent && targetItem?.type === "folder" && source.item.type === "tab" && fraction >= 0.3 && fraction <= 0.7) {
-        const children = targetItem.children.filter((ref) => referenceId2(ref) !== id);
+        const children = targetItem.children.filter((ref) => referenceId(ref) !== id);
         destination = { side, index: children.length, folder: targetItem.id };
         dwellFolder = targetItem.id;
       } else {
@@ -14828,8 +14873,9 @@ function createDragOverlay2(sourceRow) {
   const rect = sourceRow.getBoundingClientRect();
   overlay.style.width = rect.width + "px";
   overlay.style.height = rect.height + "px";
-  overlay.style.left = rect.left + "px";
-  overlay.style.top = rect.top + "px";
+  overlay.style.left = "0px";
+  overlay.style.top = "0px";
+  overlay.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
   const toggle = overlay.querySelector(".canvas-configure-tabs-toggle");
   if (toggle)
     toggle.style.pointerEvents = "none";
@@ -15015,16 +15061,14 @@ function ConfigureTabsModalInner(props) {
           _dragOverlay = createDragOverlay2(sourceRow);
         }
       }
-      if (_dragOverlay) {
-        _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`;
-        _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`;
-      }
-      _lastPointerX = ev.clientX;
-      _lastPointerY = ev.clientY;
-      updateAutoScroll(ev.clientX, ev.clientY);
-      runHitTestAndReorder(ev.clientX, ev.clientY);
+      positionConfigureDragOverlay(ev.clientX, ev.clientY);
+      scheduleConfigureDragFrame();
     };
-    const onUp = async (_ev) => {
+    const onUp = async (upEvent) => {
+      if (_dragActive) {
+        positionConfigureDragOverlay(upEvent.clientX, upEvent.clientY);
+        runHitTestAndReorder(upEvent.clientX, upEvent.clientY);
+      }
       detachDragListeners();
       stopAutoScroll();
       _dragDraftSnapshot = null;
@@ -15042,7 +15086,7 @@ function ConfigureTabsModalInner(props) {
     };
     _dragMoveHandler = onMove;
     _dragUpHandler = onUp;
-    document.addEventListener("pointermove", onMove, { passive: true });
+    document.addEventListener("pointermove", onMove, { passive: false });
     document.addEventListener("pointerup", onUp);
     document.addEventListener("pointercancel", onUp);
   }, []);
@@ -15079,16 +15123,14 @@ function ConfigureTabsModalInner(props) {
         source.classList.add("canvas-organization-dragging");
         _dragOverlay = createOrganizationDragOverlay(id);
       }
-      if (_dragOverlay) {
-        _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`;
-        _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`;
-      }
-      _lastPointerX = ev.clientX;
-      _lastPointerY = ev.clientY;
-      updateAutoScroll(ev.clientX, ev.clientY);
-      runOrganizationDragHitTest(ev.clientX, ev.clientY);
+      positionConfigureDragOverlay(ev.clientX, ev.clientY);
+      scheduleConfigureDragFrame();
     };
-    const onUp = async () => {
+    const onUp = async (upEvent) => {
+      if (_dragActive) {
+        positionConfigureDragOverlay(upEvent.clientX, upEvent.clientY);
+        runOrganizationDragHitTest(upEvent.clientX, upEvent.clientY);
+      }
       detachDragListeners();
       stopAutoScroll();
       if (!_dragActive) {
@@ -15666,7 +15708,7 @@ function unmountModal() {
   clearDragState2();
   document.body.style.overflow = "";
 }
-var _modalContainer = null, _openInProgress = false, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _organizationDragId = null, _organizationDropTargetKey = null, _organizationFolderDwell = null, _organizationFolderDwellId = null, _organizationFlipGeneration = 0, _organizationFlipTokens, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _settleTimer2 = null, _settleCompletion = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
+var _modalContainer = null, _openInProgress = false, _draftRef = null, _baseSnapshotRef = null, _baseEpoch = 0, _dragTabId = null, _dragFromSide = null, _organizationDragId = null, _organizationDropTargetKey = null, _organizationFolderDwell = null, _organizationFolderDwellId = null, _organizationFlipGeneration = 0, _organizationFlipTokens, _tabFlipGeneration = 0, _dragActive = false, _dragOverlay = null, _dragOffsetX = 0, _dragOffsetY = 0, _dragStartX = 0, _dragStartY = 0, _lastDropTarget = null, _flipRects = null, _dragMoveHandler = null, _dragUpHandler = null, _dragRafId = null, _settleTimer2 = null, _settleCompletion = null, _settling = false, _commitPromise = null, _dragDraftSnapshot = null, _lastPointerX = 0, _lastPointerY = 0, _autoScrollContainer = null, _autoScrollDir = 0, _autoScrollRaf = null, SETTLE_DURATION_MS2 = 140, SETTLE_MIN_DISTANCE_PX2 = 2, AUTOSCROLL_EDGE_PX = 56, AUTOSCROLL_SPEED_PX = 14, MODAL_STYLE_ID = "canvas-configure-tabs-styles", _catalogRef;
 var init_configure_modal = __esm(() => {
   init_configure_organization();
   init_preact_module();
@@ -15979,164 +16021,547 @@ var init_tab_context_menu = __esm(() => {
 });
 
 // src/tabs/organization-drag.ts
-function installOrganizationDrag() {
-  const generation = currentLifecycleGeneration();
-  let cleanupDrag = null;
-  let suppressClickUntil = 0;
-  const suppressClick = (e3) => {
-    if (Date.now() < suppressClickUntil) {
-      e3.preventDefault();
-      e3.stopImmediatePropagation();
+function isOrganizationDragActive() {
+  return activeDrag !== null;
+}
+function mainSurface() {
+  const list = getMainMirrorTabList();
+  return list?.querySelector(".sidebar-ux-tab-list-main") ?? list;
+}
+function getSurfaces() {
+  const surfaces = [];
+  const primary = mainSurface();
+  if (primary)
+    surfaces.push({ side: "primary", container: primary, parent: primary, axis: containerAxis(primary) });
+  const secondary = getSecondaryTabList();
+  if (secondary)
+    surfaces.push({ side: "secondary", container: secondary, parent: secondary, axis: containerAxis(secondary) });
+  return surfaces;
+}
+function visibleNodes(parent) {
+  return Array.from(parent.children).filter((node) => {
+    if (!(node instanceof HTMLElement))
+      return false;
+    if (!node.hasAttribute("data-canvas-organization") || node.hasAttribute("data-canvas-folder-member"))
+      return false;
+    return node.style.display !== "none";
+  });
+}
+function findItemLocation(id, organization) {
+  for (const side of ["primary", "secondary"]) {
+    for (const item of organization[side]) {
+      if (itemId(item) === id)
+        return { side, item };
+      if (item.type === "folder") {
+        const child = item.children.find((ref) => referenceId(ref) === id);
+        if (child)
+          return { side, item: { type: "tab", ...child } };
+      }
     }
-  };
-  const down = (e3) => {
-    if (!getModel()?.organization || e3.button !== 0)
-      return;
-    const element = e3.target;
-    const configureHandle = element?.closest(".canvas-configure-tabs-drag-handle");
-    const configureSource = configureHandle?.closest("[data-organization-ref]");
-    if (configureSource)
-      return;
-    const source = element?.closest("[data-canvas-organization],button[data-tab-id]");
-    if (!source || !isDragAndDropDrawerTabsEnabled() || source.closest(".canvas-configure-tabs-overlay") || source.hasAttribute("data-canvas-folder-member"))
-      return;
-    const primaryList = getMainMirrorTabList(), secondaryList = getSecondaryTabList();
-    const from = primaryList?.contains(source) ? "primary" : secondaryList?.contains(source) ? "secondary" : null;
-    if (!from)
-      return;
-    const id = source.getAttribute("data-canvas-organization") ?? getHost()?.findKey(source.getAttribute("data-tab-id") ?? "");
+  }
+  return null;
+}
+function resolveSource(target) {
+  if (!(target instanceof Element))
+    return null;
+  const candidate = target.closest("[data-canvas-organization],button[data-tab-id]");
+  if (!candidate || candidate.hasAttribute("data-canvas-folder-member"))
+    return null;
+  return candidate;
+}
+function sourceId(source) {
+  const tagged = source.getAttribute("data-canvas-organization");
+  if (tagged)
+    return tagged;
+  const tabId = source.getAttribute("data-tab-id");
+  return tabId ? getHost()?.findKey(tabId) ?? null : null;
+}
+function destinationItems(side, sourceId2) {
+  const model = getModel();
+  return model ? organizationFor(model)[side].filter((item) => itemId(item) !== sourceId2) : [];
+}
+function surfaceContainsSource(surface, source) {
+  return surface.container.contains(source);
+}
+function overlayOverlaps(geom, rect, axis) {
+  const padY = axis === "x" ? 80 : 8;
+  const padX = axis === "x" ? 8 : 80;
+  return geom.right > rect.left - padX && geom.left < rect.right + padX && geom.bottom > rect.top - padY && geom.top < rect.bottom + padY;
+}
+function chooseSurface(surfaces, geom) {
+  const candidates = surfaces.filter((surface) => overlayOverlaps(geom, surface.container.getBoundingClientRect(), surface.axis));
+  if (!candidates.length)
+    return null;
+  const horizontal = candidates.filter((surface) => surface.axis === "x");
+  if (horizontal.length >= 2) {
+    const sorted = [...horizontal].sort((a3, b2) => a3.container.getBoundingClientRect().left - b2.container.getBoundingClientRect().left);
+    const left = sorted[0], right = sorted[sorted.length - 1];
+    return seamChoice(geom.centerX, left.container.getBoundingClientRect(), right.container.getBoundingClientRect()) === "left" ? left : right;
+  }
+  return candidates.reduce((best, next) => {
+    const a3 = best.container.getBoundingClientRect(), b2 = next.container.getBoundingClientRect();
+    const da = Math.abs(geom.centerX - (a3.left + a3.width / 2));
+    const db = Math.abs(geom.centerX - (b2.left + b2.width / 2));
+    return db < da ? next : best;
+  });
+}
+function calculateTarget(drag) {
+  const model = getModel();
+  if (!model || !drag.overlay)
+    return null;
+  const organization = organizationFor(model);
+  const geom = dragHitGeometry(drag.overlayX, drag.overlayY, drag.width, drag.height);
+  const surface = chooseSurface(getSurfaces(), geom);
+  if (!surface)
+    return null;
+  const center = axisCoordinate(geom, surface.axis);
+  const nodes = visibleNodes(surface.parent).filter((node) => node.getAttribute("data-canvas-organization") !== drag.id);
+  const destination = destinationItems(surface.side, drag.id);
+  const itemById = new Map(destination.map((item) => [itemId(item), item]));
+  let visibleBefore = 0;
+  for (const node of nodes) {
+    const id = node.getAttribute("data-canvas-organization");
     if (!id)
-      return;
-    cleanupDrag?.();
-    let touchReady = e3.pointerType !== "touch" && e3.pointerType !== "pen";
-    const armTimer = setTimeout(() => {
-      touchReady = true;
-    }, 200);
-    let folderDwell = null;
-    let started = false, overlay = null, target = null, highlighted = null;
-    const { clientX: x2, clientY: y3 } = e3;
+      continue;
+    const item = itemById.get(id);
+    const rect = node.getBoundingClientRect();
+    const start = surface.axis === "x" ? rect.left : rect.top;
+    const size = surface.axis === "x" ? rect.width : rect.height;
+    const fraction = size > 0 ? (center - start) / size : 0.5;
+    if (item?.type === "folder" && drag.sourceItem.type === "tab" && fraction >= 0.3 && fraction <= 0.7) {
+      const folder = organization[surface.side].find((candidate) => candidate.type === "folder" && candidate.id === item.id);
+      if (folder?.type === "folder") {
+        return { side: surface.side, index: folder.children.filter((ref) => referenceId(ref) !== drag.id).length, folder: folder.id, node };
+      }
+    }
+    if (center < axisMidpoint(rect, surface.axis)) {
+      const index = destination.findIndex((candidate) => itemId(candidate) === id);
+      return { side: surface.side, index: index >= 0 ? index : visibleBefore, node, after: false };
+    }
+    visibleBefore++;
+  }
+  const lastNode = nodes[nodes.length - 1];
+  const lastVisible = lastNode?.getAttribute("data-canvas-organization");
+  const lastIndex = lastVisible ? destination.findIndex((item) => itemId(item) === lastVisible) : -1;
+  return { side: surface.side, index: lastIndex >= 0 ? lastIndex + 1 : 0, node: lastNode, after: !!lastNode };
+}
+function clearTargetIndicator(drag) {
+  drag.targetNode?.classList.remove("canvas-folder-drop", "canvas-organization-insert-before", "canvas-organization-insert-after");
+  drag.targetNode = null;
+}
+function indicateTarget(drag, target) {
+  clearTargetIndicator(drag);
+  if (!target?.node)
+    return;
+  drag.targetNode = target.node;
+  if (target.folder)
+    drag.targetNode.classList.add("canvas-folder-drop");
+  else
+    drag.targetNode.classList.add(target.after ? "canvas-organization-insert-after" : "canvas-organization-insert-before");
+}
+function snapshotRects(parents) {
+  const rects = new Map;
+  for (const parent of parents)
+    for (const node of visibleNodes(parent)) {
+      const id = node.getAttribute("data-canvas-organization");
+      if (id)
+        rects.set(id, node.getBoundingClientRect());
+    }
+  return rects;
+}
+function applyFLIP3(previous, excludedId, parents) {
+  const animated = [];
+  const seen = new Set;
+  for (const parent of parents)
+    for (const node of visibleNodes(parent)) {
+      if (seen.has(node))
+        continue;
+      seen.add(node);
+      const id = node.getAttribute("data-canvas-organization");
+      const before = id ? previous.get(id) : null;
+      if (!id || id === excludedId || !before)
+        continue;
+      const { dx, dy } = flipDelta(before, node.getBoundingClientRect());
+      if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5)
+        continue;
+      node.style.setProperty("transition", "none", "important");
+      node.style.setProperty("transform", `translate(${dx}px, ${dy}px)`, "important");
+      animated.push(node);
+    }
+  if (!animated.length)
+    return;
+  document.body.offsetHeight;
+  const token = ++flipToken;
+  requestAnimationFrame(() => {
+    for (const node of animated) {
+      flipTokens.set(node, token);
+      node.style.setProperty("transition", "transform 200ms cubic-bezier(0.25, 1, 0.5, 1)", "important");
+      node.style.removeProperty("transform");
+      setTimeout(() => {
+        if (flipTokens.get(node) !== token)
+          return;
+        node.style.removeProperty("transition");
+        node.style.removeProperty("transform");
+        flipTokens.delete(node);
+      }, 220);
+    }
+  });
+}
+function parkSource(drag, target) {
+  if (target.folder)
+    return;
+  const surface = getSurfaces().find((candidate) => candidate.side === target.side);
+  if (!surface)
+    return;
+  const nextItem = destinationItems(target.side, drag.id)[target.index];
+  const nextNode = nextItem ? Array.from(surface.parent.children).find((node) => node instanceof HTMLElement && node !== drag.source && node.getAttribute("data-canvas-organization") === itemId(nextItem)) : null;
+  if (nextNode) {
+    if (drag.source.parentElement !== surface.parent || drag.source.nextElementSibling !== nextNode)
+      surface.parent.insertBefore(drag.source, nextNode);
+    return;
+  }
+  const dock = target.side === "secondary" ? getSecondaryStartDock(surface.parent) : null;
+  if (dock) {
+    if (drag.source.parentElement !== surface.parent || drag.source.nextElementSibling !== dock)
+      surface.parent.insertBefore(drag.source, dock);
+  } else if (drag.source.parentElement !== surface.parent || drag.source.nextElementSibling !== null) {
+    if (target.side === "secondary")
+      appendSecondaryTabNode(surface.parent, drag.source);
+    else
+      surface.parent.appendChild(drag.source);
+  }
+}
+function setDropTarget(drag, target) {
+  const key = `${target.side}|${target.folder ?? ""}|${target.index}`;
+  if (drag.targetKey === key) {
+    drag.target = target;
+    indicateTarget(drag, target);
+    return;
+  }
+  drag.targetKey = key;
+  drag.target = target;
+  indicateTarget(drag, target);
+  if (target.folder) {
+    const sourceSurface2 = getSurfaces().find((surface) => surface.container.contains(drag.source));
+    if (sourceSurface2 && drag.source.parentElement !== drag.originalParent) {
+      const previous2 = snapshotRects([sourceSurface2.parent, drag.originalParent]);
+      restoreSource(drag);
+      applyFLIP3(previous2, drag.id, [sourceSurface2.parent, drag.originalParent]);
+    }
+    return;
+  }
+  const surfaces = getSurfaces();
+  const sourceSurface = surfaces.find((surface) => surface.container.contains(drag.source));
+  const destinationSurface = surfaces.find((surface) => surface.side === target.side);
+  if (!destinationSurface)
+    return;
+  const parents = [sourceSurface?.parent, destinationSurface.parent].filter((value, index, all) => !!value && all.indexOf(value) === index);
+  const previous = snapshotRects(parents);
+  parkSource(drag, target);
+  applyFLIP3(previous, drag.id, parents);
+}
+function moveOverlay(drag, x2, y3) {
+  drag.overlayX = x2 - drag.offsetX;
+  drag.overlayY = y3 - drag.offsetY;
+  if (drag.overlay)
+    drag.overlay.style.transform = `translate3d(${drag.overlayX}px, ${drag.overlayY}px, 0)`;
+}
+function processFrame(drag) {
+  drag.frame = null;
+  if (activeDrag !== drag || !drag.started || !isLifecycleCurrent(drag.generation))
+    return;
+  const target = calculateTarget(drag);
+  if (target)
+    setDropTarget(drag, target);
+}
+function scheduleFrame(drag) {
+  if (drag.frame !== null)
+    return;
+  drag.frame = requestAnimationFrame(() => processFrame(drag));
+}
+function createOverlay(source) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "canvas-tab-list-dnd-overlay-clone";
+  const clone = source.cloneNode(true);
+  clone.classList.remove("canvas-tab-list-dnd-placeholder");
+  if (clone.tagName === "BUTTON")
+    clone.classList.add("canvas-tab-list-dnd-overlay-clone-btn");
+  const rect = source.getBoundingClientRect();
+  wrapper.style.width = `${rect.width}px`;
+  wrapper.style.height = `${rect.height}px`;
+  wrapper.style.left = "0px";
+  wrapper.style.top = "0px";
+  wrapper.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+  wrapper.appendChild(clone);
+  document.body.appendChild(wrapper);
+  return wrapper;
+}
+function removeListeners(drag) {
+  document.removeEventListener("pointermove", drag.move, true);
+  document.removeEventListener("pointerup", drag.up, true);
+  document.removeEventListener("pointercancel", drag.pointerCancel, true);
+  document.removeEventListener("keydown", drag.key, true);
+  document.removeEventListener("contextmenu", drag.contextMenu, true);
+  if (drag.armTimer !== null)
+    clearTimeout(drag.armTimer);
+  if (drag.frame !== null)
+    cancelAnimationFrame(drag.frame);
+  drag.frame = null;
+}
+function restoreSource(drag) {
+  const { source, originalParent, originalNextSibling } = drag;
+  if (source.parentNode === originalParent) {
+    if (originalNextSibling && source.nextSibling !== originalNextSibling)
+      originalParent.insertBefore(source, originalNextSibling);
+    else if (!originalNextSibling && source.nextSibling)
+      originalParent.appendChild(source);
+  } else if (originalNextSibling?.parentNode === originalParent)
+    originalParent.insertBefore(source, originalNextSibling);
+  else
+    originalParent.appendChild(source);
+}
+function cleanupVisuals(drag, restore) {
+  removeListeners(drag);
+  if (restore)
+    restoreSource(drag);
+  drag.overlay?.remove();
+  drag.source.classList.remove("canvas-tab-list-dnd-placeholder");
+  clearTargetIndicator(drag);
+  document.body.classList.remove("canvas-tab-list-dnd-dragging");
+  document.body.style.userSelect = "";
+  document.body.style.cursor = "";
+}
+function settleOverlay(drag, target) {
+  if (!drag.overlay)
+    return Promise.resolve();
+  const targetNode = target.folder ? getSurfaces().find((surface) => surface.side === target.side)?.parent.querySelector(`[data-canvas-organization="folder:${CSS.escape(target.folder)}"]`) : drag.source;
+  const rect = targetNode?.getBoundingClientRect();
+  if (!rect)
+    return Promise.resolve();
+  const dx = rect.left - drag.overlayX, dy = rect.top - drag.overlayY;
+  if (Math.hypot(dx, dy) < SETTLE_MIN_DISTANCE_PX3)
+    return Promise.resolve();
+  return new Promise((resolve) => {
+    const overlay = drag.overlay;
+    let done = false;
     const finish = () => {
-      clearTimeout(armTimer);
-      if (folderDwell)
-        clearTimeout(folderDwell);
-      document.removeEventListener("pointermove", move, true);
-      document.removeEventListener("pointerup", up, true);
-      document.removeEventListener("pointercancel", cancel, true);
-      document.removeEventListener("keydown", key, true);
-      overlay?.remove();
-      source.classList.remove("canvas-organization-drag-source");
-      highlighted?.classList.remove("canvas-folder-drop", "canvas-organization-insert-before", "canvas-organization-insert-after");
-      cleanupDrag = null;
+      if (done)
+        return;
+      done = true;
+      overlay.removeEventListener("transitionend", onEnd);
+      clearTimeout(timer);
+      resolve();
     };
-    const cancel = () => {
-      if (started)
-        suppressClickUntil = Date.now() + 250;
-      finish();
+    const onEnd = (event) => {
+      if (event.target === overlay && (!event.propertyName || event.propertyName === "transform"))
+        finish();
     };
-    const key = (event) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        cancel();
-      }
-    };
-    const move = (event) => {
-      if (!isLifecycleCurrent(generation)) {
-        cancel();
+    overlay.addEventListener("transitionend", onEnd);
+    overlay.classList.add("canvas-tab-list-dnd-overlay-settling");
+    overlay.offsetWidth;
+    overlay.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+    const timer = setTimeout(finish, SETTLE_DURATION_MS3 + 40);
+  });
+}
+function finishSession(drag, restore) {
+  cleanupVisuals(drag, restore);
+  if (activeDrag === drag)
+    activeDrag = null;
+}
+function startVisualDrag(drag, event) {
+  if (drag.started || !isDragAndDropDrawerTabsEnabled() || !isLifecycleCurrent(drag.generation))
+    return;
+  drag.started = true;
+  const rect = drag.source.getBoundingClientRect();
+  drag.offsetX = event.clientX - rect.left;
+  drag.offsetY = event.clientY - rect.top;
+  drag.width = rect.width;
+  drag.height = rect.height;
+  drag.source.classList.add("canvas-tab-list-dnd-placeholder");
+  drag.overlay = createOverlay(drag.source);
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "grabbing";
+  document.body.classList.add("canvas-tab-list-dnd-dragging");
+  moveOverlay(drag, event.clientX, event.clientY);
+  scheduleFrame(drag);
+}
+function noOpDrop(drag, target) {
+  const model = getModel();
+  if (!model)
+    return true;
+  const organization = organizationFor(model);
+  const sourceIndex = organization[drag.from].findIndex((item) => itemId(item) === drag.id);
+  const parent = organization[drag.from].find((item) => item.type === "folder" && item.children.some((ref) => referenceId(ref) === drag.id));
+  const parentId = parent?.type === "folder" ? parent.id : undefined;
+  const childIndex = parent?.type === "folder" ? parent.children.findIndex((ref) => referenceId(ref) === drag.id) : -1;
+  return drag.from === target.side && parentId === target.folder && (parentId ? childIndex === target.index : sourceIndex === target.index);
+}
+function makeSession(source, id, item, from, event) {
+  const session = {};
+  Object.assign(session, {
+    id,
+    source,
+    sourceItem: item,
+    from,
+    originalParent: source.parentElement,
+    originalNextSibling: source.nextSibling,
+    startX: event.clientX,
+    startY: event.clientY,
+    offsetX: 0,
+    offsetY: 0,
+    width: 0,
+    height: 0,
+    overlay: null,
+    overlayX: 0,
+    overlayY: 0,
+    started: false,
+    target: null,
+    targetKey: null,
+    targetNode: null,
+    frame: null,
+    armTimer: null,
+    touchReady: event.pointerType !== "touch" && event.pointerType !== "pen",
+    generation: currentLifecycleGeneration(),
+    cancel: false
+  });
+  session.contextMenu = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
+  session.key = (ev) => {
+    if (ev.key !== "Escape")
+      return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    session.cancel = true;
+    finishSession(session, true);
+  };
+  session.pointerCancel = () => {
+    session.cancel = true;
+    finishSession(session, true);
+  };
+  session.move = (ev) => {
+    if (activeDrag !== session || !isLifecycleCurrent(session.generation)) {
+      session.cancel = true;
+      finishSession(session, true);
+      return;
+    }
+    const distance = Math.hypot(ev.clientX - session.startX, ev.clientY - session.startY);
+    if (!session.started && !session.touchReady) {
+      if (distance > ACTIVATION_DISTANCE_PX)
+        finishSession(session, true);
+      return;
+    }
+    if (!session.started) {
+      if (distance < ACTIVATION_DISTANCE_PX)
         return;
-      }
-      const distance = Math.hypot(event.clientX - x2, event.clientY - y3);
-      if (!started && !touchReady) {
-        if (distance > 7)
-          cancel();
+      startVisualDrag(session, ev);
+    }
+    if (!session.started)
+      return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    moveOverlay(session, ev.clientX, ev.clientY);
+    scheduleFrame(session);
+  };
+  session.up = (event_) => {
+    removeListeners(session);
+    if (!session.started || session.cancel || !isLifecycleCurrent(session.generation)) {
+      finishSession(session, true);
+      return;
+    }
+    event_.preventDefault();
+    event_.stopImmediatePropagation();
+    suppressClickUntil = Date.now() + 250;
+    moveOverlay(session, event_.clientX, event_.clientY);
+    const finalTarget = calculateTarget(session);
+    if (finalTarget)
+      setDropTarget(session, finalTarget);
+    const target = session.target;
+    if (!target || noOpDrop(session, target)) {
+      settleOverlay(session, target ?? { side: session.from, index: 0 }).finally(() => finishSession(session, true));
+      return;
+    }
+    const settle = settleOverlay(session, target);
+    settle.then(async () => {
+      if (activeDrag !== session || !isLifecycleCurrent(session.generation))
         return;
-      }
-      if (!started && distance < 7)
-        return;
-      if (!started) {
-        started = true;
-        source.classList.add("canvas-organization-drag-source");
-        overlay = source.cloneNode(true);
-        overlay.style.cssText = `position:fixed;pointer-events:none;z-index:12000;width:${source.getBoundingClientRect().width}px;height:${source.getBoundingClientRect().height}px;opacity:.85`;
-        document.body.appendChild(overlay);
-      }
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (overlay) {
-        overlay.style.left = `${event.clientX + 12}px`;
-        overlay.style.top = `${event.clientY + 12}px`;
-      }
-      highlighted?.classList.remove("canvas-folder-drop", "canvas-organization-insert-before", "canvas-organization-insert-after");
-      highlighted = null;
-      target = null;
-      const model = getModel();
-      if (!model)
-        return;
-      const horizontal = isHorizontalStrip();
-      for (const [side, list] of [["primary", getMainMirrorTabList()], ["secondary", getSecondaryTabList()]]) {
-        if (!list)
-          continue;
-        const rect = list.getBoundingClientRect();
-        if (event.clientX < rect.left - 12 || event.clientX > rect.right + 12 || event.clientY < rect.top - 12 || event.clientY > rect.bottom + 12)
-          continue;
-        const items = organizationFor(model)[side];
-        target = { side, index: items.length };
-        for (let index = 0;index < items.length; index++) {
-          const item = items[index];
-          const node = item.type === "tab" ? Array.from(list.querySelectorAll("button[data-tab-id]")).find((btn) => item.key && getHost()?.findKey(btn.getAttribute("data-tab-id") ?? "") === item.key) : Array.from(list.querySelectorAll("[data-canvas-organization]")).find((node2) => node2.getAttribute("data-canvas-organization") === itemId(item));
-          if (!node || node.getAttribute("data-canvas-folder-member") !== null || node.style.display === "none")
-            continue;
-          const box = node.getBoundingClientRect(), position = horizontal ? event.clientX : event.clientY, start = horizontal ? box.left : box.top, size = horizontal ? box.width : box.height;
-          if (position > start + size)
-            continue;
-          const fraction = (position - start) / size;
-          target = { side, index: index + (fraction > 0.7 ? 1 : 0) };
-          if (item.type === "folder" && !id.startsWith("folder:") && !id.startsWith("divider:") && fraction >= 0.3 && fraction <= 0.7)
-            target = { side, index: -1, folder: item.id };
-          highlighted = node;
-          node.classList.add(target.folder ? "canvas-folder-drop" : fraction > 0.7 ? "canvas-organization-insert-after" : "canvas-organization-insert-before");
-          break;
+      try {
+        await commitOrganization((organization) => relocateOrganizationItem(organization, session.id, target.side, target.index, target.folder));
+      } catch (error) {
+        showOrganizationError(error);
+        restoreSource(session);
+      } finally {
+        if (activeDrag === session) {
+          cleanupVisuals(session, false);
+          activeDrag = null;
+          Promise.resolve().then(() => (init_folder_ui(), exports_folder_ui)).then((module) => module.renderFolders());
         }
       }
-    };
-    const up = (event) => {
-      const model = getModel(), dest = target;
-      if (started) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        suppressClickUntil = Date.now() + 250;
-      }
-      finish();
-      if (started && dest && model && isLifecycleCurrent(generation)) {
-        commitOrganization((org) => {
-          const sourceIndex = org[from].findIndex((item) => itemId(item) === id);
-          const childSource = dest.folder ? org[from].find((item) => item.type === "folder" && item.id === dest.folder) : null;
-          const childIndex = childSource?.type === "folder" ? childSource.children.findIndex((ref) => referenceId(ref) === id) : -1;
-          const index = from === dest.side && (dest.folder ? childIndex >= 0 && childIndex < dest.index : sourceIndex >= 0 && sourceIndex < dest.index) ? dest.index - 1 : dest.index;
-          return relocateOrganizationItem(org, id, dest.side, index, dest.folder);
-        }).catch(showOrganizationError);
-      }
-    };
-    cleanupDrag = finish;
-    document.addEventListener("pointermove", move, { capture: true, passive: false });
-    document.addEventListener("pointerup", up, true);
-    document.addEventListener("pointercancel", cancel, true);
-    document.addEventListener("keydown", key, true);
+    });
+  };
+  return session;
+}
+function suppressSyntheticClick2(event) {
+  if (Date.now() >= suppressClickUntil)
+    return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+function installOrganizationDrag() {
+  injectDndStyles();
+  const down = (event) => {
+    if (!getModel()?.organization || !isDragAndDropDrawerTabsEnabled() || event.button !== 0 || activeDrag)
+      return;
+    const source = resolveSource(event.target);
+    if (!source)
+      return;
+    const surfaces = getSurfaces();
+    const surface = surfaces.find((candidate) => surfaceContainsSource(candidate, source));
+    if (!surface)
+      return;
+    const model = getModel();
+    const id = sourceId(source);
+    if (!model || !id)
+      return;
+    const location = findItemLocation(id, organizationFor(model));
+    if (!location || location.side !== surface.side)
+      return;
+    const session = makeSession(source, id, location.item, surface.side, event);
+    activeDrag = session;
+    if (!session.touchReady) {
+      session.armTimer = setTimeout(() => {
+        session.armTimer = null;
+        if (activeDrag !== session || session.cancel)
+          return;
+        session.touchReady = true;
+        startVisualDrag(session, event);
+      }, LONG_PRESS_MS2);
+    }
+    document.addEventListener("pointermove", session.move, { capture: true, passive: false });
+    document.addEventListener("pointerup", session.up, true);
+    document.addEventListener("pointercancel", session.pointerCancel, true);
+    document.addEventListener("keydown", session.key, true);
+    document.addEventListener("contextmenu", session.contextMenu, true);
   };
   document.addEventListener("pointerdown", down, true);
-  document.addEventListener("click", suppressClick, true);
+  document.addEventListener("click", suppressSyntheticClick2, true);
   return () => {
-    cleanupDrag?.();
     document.removeEventListener("pointerdown", down, true);
-    document.removeEventListener("click", suppressClick, true);
+    document.removeEventListener("click", suppressSyntheticClick2, true);
+    if (activeDrag)
+      finishSession(activeDrag, true);
   };
 }
+var ACTIVATION_DISTANCE_PX = 6, LONG_PRESS_MS2 = 200, SETTLE_DURATION_MS3 = 140, SETTLE_MIN_DISTANCE_PX3 = 2, activeDrag = null, suppressClickUntil = 0, flipToken = 0, flipTokens;
 var init_organization_drag = __esm(() => {
   init_dispatch();
   init_state();
   init_main_mirror_drawer();
   init_secondary();
+  init_tab_list_dnd();
   init_organization_actions();
+  flipTokens = new WeakMap;
 });
 
 // src/tabs/folder-ui.ts
@@ -16181,7 +16606,6 @@ function injectFolderStyles() {
     .canvas-folder-empty { padding:24px 12px;text-align:center; }
     [data-canvas-folder-browser] [data-canvas-os-minimize] { display:none !important; }
     .canvas-folder-button:focus-visible,.canvas-folder-child:focus-visible,.canvas-folder-toolbar button:focus-visible { outline:2px solid var(--lumiverse-primary);outline-offset:-2px; }
-    .canvas-organization-drag-source { opacity:.35; }
     .canvas-organization-error { position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:12000;padding:12px 16px;border:1px solid var(--lumiverse-border);border-radius:8px;background:var(--lumiverse-bg);color:var(--lumiverse-text); }
     .canvas-organization-insert-before { box-shadow:inset 0 2px var(--lumiverse-primary); }
     .canvas-organization-insert-after { box-shadow:inset 0 -2px var(--lumiverse-primary); }
@@ -16262,25 +16686,35 @@ function renderOrganizationStrip(side) {
     return;
   const main = list.querySelector(".sidebar-ux-tab-list-main") ?? list;
   const buttons = Array.from(main.querySelectorAll("button[data-tab-id]"));
+  const sideOrganization = organizationFor(model)[side];
   for (const button of buttons) {
     const live = button.getAttribute("data-tab-id"), key = live ? host.findKey(live) : null;
     if (key)
       button.classList.toggle("sidebar-ux-tab-active", model.drawers[side].open && model.active[side] === key);
-    if (key && folderContaining(model, side, key))
+    if (key && folderContaining(model, side, key)) {
       button.setAttribute("data-canvas-folder-member", "");
-    else
+      button.removeAttribute("data-canvas-organization");
+    } else {
       button.removeAttribute("data-canvas-folder-member");
+      const root = sideOrganization.find((item) => item.type === "tab" && item.key === key);
+      if (root)
+        button.setAttribute("data-canvas-organization", itemId(root));
+      else
+        button.removeAttribute("data-canvas-organization");
+    }
   }
   const desired = [];
   const wanted = new Set;
   for (const item of organizationFor(model)[side]) {
+    const id = itemId(item);
     if (item.type === "tab") {
       const button = buttons.find((btn) => item.key && host.findKey(btn.getAttribute("data-tab-id") ?? "") === item.key);
-      if (button)
+      if (button) {
+        button.setAttribute("data-canvas-organization", id);
         desired.push(button);
+      }
       continue;
     }
-    const id = itemId(item);
     wanted.add(id);
     let node = Array.from(main.children).find((el) => el.getAttribute("data-canvas-organization") === id);
     if (!node) {
@@ -16492,12 +16926,12 @@ function mountFolders() {
   const generation = currentLifecycleGeneration();
   observed = new WeakSet;
   const schedule = () => {
-    if (scheduled)
+    if (isOrganizationDragActive() || scheduled)
       return;
     scheduled = true;
     queueMicrotask(() => {
       scheduled = false;
-      if (isLifecycleCurrent(generation)) {
+      if (!isOrganizationDragActive() && isLifecycleCurrent(generation)) {
         const model = getModel();
         if (model && !model.organization)
           dispatch({ t: "setOrganization", organization: organizationFor(model) });
