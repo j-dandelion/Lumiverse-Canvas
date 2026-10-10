@@ -1,5 +1,5 @@
 import { getHost, getModel } from '../recon/dispatch'
-import { itemId, referenceId, organizationFor, relocateOrganizationItem } from '../core/organization'
+import { itemId, organizationFor, relocateOrganizationItem } from '../core/organization'
 import type { Side } from '../core/model'
 import { isDragAndDropDrawerTabsEnabled, isHorizontalStrip } from '../settings/state'
 import { getMainMirrorTabList } from '../sidebar/main-mirror-drawer'
@@ -19,15 +19,17 @@ export function installOrganizationDrag(): () => void {
     const element = e.target as Element
     const configureHandle = element?.closest('.canvas-configure-tabs-drag-handle')
     const configureSource = configureHandle?.closest<HTMLElement>('[data-organization-ref]')
-    const source = configureSource ?? element?.closest<HTMLElement>('[data-canvas-organization],button[data-tab-id]')
-    if (!source || (!configureSource && !isDragAndDropDrawerTabsEnabled()) || (!configureSource && source.closest('.canvas-configure-tabs-overlay')) || source.hasAttribute('data-canvas-folder-member')) return
+    // Configure Tabs has a dedicated pointer-driven editor path with Canvas
+    // 2.0's FLIP and drop-settle animations. Live drawer DnD stays here.
+    if (configureSource) return
+    const source = element?.closest<HTMLElement>('[data-canvas-organization],button[data-tab-id]')
+    if (!source || !isDragAndDropDrawerTabsEnabled() || source.closest('.canvas-configure-tabs-overlay') || source.hasAttribute('data-canvas-folder-member')) return
     const primaryList = getMainMirrorTabList(), secondaryList = getSecondaryTabList()
-    const from: Side | null = configureSource ? configureSource.closest('[data-side]')?.getAttribute('data-side') as Side : primaryList?.contains(source) ? 'primary' : secondaryList?.contains(source) ? 'secondary' : null
+    const from: Side | null = primaryList?.contains(source) ? 'primary' : secondaryList?.contains(source) ? 'secondary' : null
     if (!from) return
-    const id = source.getAttribute('data-organization-ref') ?? source.getAttribute('data-canvas-organization') ?? getHost()?.findKey(source.getAttribute('data-tab-id') ?? '')
+    const id = source.getAttribute('data-canvas-organization') ?? getHost()?.findKey(source.getAttribute('data-tab-id') ?? '')
     if (!id) return
     cleanupDrag?.()
-    if (configureSource) { e.preventDefault(); e.stopImmediatePropagation() }
     let touchReady = e.pointerType !== 'touch' && e.pointerType !== 'pen'
     const armTimer = setTimeout(() => { touchReady = true }, 200)
     let folderDwell: ReturnType<typeof setTimeout> | null = null
@@ -39,30 +41,13 @@ export function installOrganizationDrag(): () => void {
     const move = (event: PointerEvent) => {
       if (!isLifecycleCurrent(generation)) { cancel(); return }
       const distance = Math.hypot(event.clientX - x, event.clientY - y)
-      if (!started && !touchReady) { if (distance > 7 && !configureSource) cancel(); return }
+      if (!started && !touchReady) { if (distance > 7) cancel(); return }
       if (!started && distance < 7) return
       if (!started) { started = true; source.classList.add('canvas-organization-drag-source'); overlay = source.cloneNode(true) as HTMLElement; overlay.style.cssText = `position:fixed;pointer-events:none;z-index:12000;width:${source.getBoundingClientRect().width}px;height:${source.getBoundingClientRect().height}px;opacity:.85`; document.body.appendChild(overlay) }
       event.preventDefault(); event.stopImmediatePropagation()
       if (overlay) { overlay.style.left = `${event.clientX + 12}px`; overlay.style.top = `${event.clientY + 12}px` }
       highlighted?.classList.remove('canvas-folder-drop', 'canvas-organization-insert-before', 'canvas-organization-insert-after'); highlighted = null; target = null
       const model = getModel(); if (!model) return
-      if (configureSource) {
-        const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-organization-ref]')
-        const column = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-side]')
-        const side = column?.getAttribute('data-side') as Side | null
-        if (side !== 'primary' && side !== 'secondary') return
-        if (!hit) { target = { side, index: -1 }; return }
-        const ref = hit.getAttribute('data-organization-ref')!, parent = hit.getAttribute('data-organization-parent') ?? undefined
-        const index = Number(hit.getAttribute('data-organization-index')), box = hit.getBoundingClientRect(), fraction = (event.clientY - box.top) / box.height
-        const folder = ref.startsWith('folder:') && !id.startsWith('folder:') && !id.startsWith('divider:') && fraction >= .3 && fraction <= .7 ? ref.slice(7) : undefined
-        target = { side, index: folder ? -1 : index + (fraction > .5 ? 1 : 0), folder: folder ?? parent }
-        highlighted = hit; hit.classList.add(folder ? 'canvas-folder-drop' : fraction > .5 ? 'canvas-organization-insert-after' : 'canvas-organization-insert-before')
-        if (folder && !folderDwell) {
-          const disclosure = hit.querySelector<HTMLButtonElement>('[aria-expanded=false]')
-          if (disclosure) folderDwell = setTimeout(() => { if (highlighted === hit) disclosure.click(); folderDwell = null }, 650)
-        } else if (!folder && folderDwell) { clearTimeout(folderDwell); folderDwell = null }
-        return
-      }
       const horizontal = isHorizontalStrip()
       for (const [side, list] of [['primary', getMainMirrorTabList()], ['secondary', getSecondaryTabList()]] as const) {
         if (!list) continue

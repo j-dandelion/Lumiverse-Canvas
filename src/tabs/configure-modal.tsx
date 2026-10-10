@@ -10,7 +10,7 @@
 // structural deltas of dual-drawer columns + draft footer.
 
 import { ConfigureOrganization, ORGANIZATION_EDITOR_CSS } from './configure-organization'
-import { references, type Organization } from '../core/organization'
+import { itemId, referenceId, references, relocateOrganizationItem, type Organization, type OrganizationItem } from '../core/organization'
 import { h, render } from 'preact'
 import { useEffect, useCallback, useRef } from 'preact/hooks'
 import {
@@ -68,6 +68,13 @@ let _baseEpoch = 0
 // ── Drag state (module-level, no re-render during drag) ──
 let _dragTabId: string | null = null
 let _dragFromSide: 'primary' | 'secondary' | null = null
+/** Non-null only while ConfigureOrganization owns the active pointer drag. */
+let _organizationDragId: string | null = null
+let _organizationDropTargetKey: string | null = null
+let _organizationFolderDwell: ReturnType<typeof setTimeout> | null = null
+let _organizationFolderDwellId: string | null = null
+let _organizationFlipGeneration = 0
+const _organizationFlipTokens = new WeakMap<HTMLElement, number>()
 let _dragActive = false
 let _dragOverlay: HTMLElement | null = null
 let _dragOffsetX = 0
@@ -80,6 +87,7 @@ let _dragMoveHandler: ((e: PointerEvent) => void) | null = null
 let _dragUpHandler: ((e: PointerEvent) => void) | null = null
 /** In-flight drop-settle timeout (transitionend fallback). */
 let _settleTimer: ReturnType<typeof setTimeout> | null = null
+let _settleCompletion: (() => void) | null = null
 /** True while overlay eases into its drop slot after pointerup. */
 let _settling = false
 let _commitPromise: Promise<CommitResult> | null = null
@@ -673,6 +681,10 @@ function detachDragListeners(): void {
 }
 
 function cancelOverlaySettle(): void {
+  if (_settleCompletion) {
+    _settleCompletion()
+    return
+  }
   if (_settleTimer !== null) {
     clearTimeout(_settleTimer)
     _settleTimer = null
@@ -721,6 +733,7 @@ function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> 
     const finish = () => {
       if (done) return
       done = true
+      _settleCompletion = null
       overlay.removeEventListener('transitionend', onEnd)
       if (_settleTimer !== null) {
         clearTimeout(_settleTimer)
@@ -736,6 +749,7 @@ function animateOverlaySettle(destLeft: number, destTop: number): Promise<void> 
     }
 
     _settling = true
+    _settleCompletion = finish
     overlay.addEventListener('transitionend', onEnd)
     overlay.classList.add('canvas-configure-tabs-overlay-settling')
     // Ensure the settling class applies before changing position.
@@ -774,13 +788,26 @@ function clearDragState(): void {
         ;(r as HTMLElement).style.transition = ''
       }
     }
+    for (const el of document.querySelectorAll<HTMLElement>('[data-organization-drag-id]')) {
+      if (el.getAttribute('data-organization-drag-id') !== _dragTabId) continue
+      el.classList.remove('canvas-organization-dragging')
+      el.style.transform = ''
+      el.style.transition = ''
+    }
   }
+  if (_organizationFolderDwell !== null) {
+    clearTimeout(_organizationFolderDwell)
+    _organizationFolderDwell = null
+  }
+  _organizationFolderDwellId = null
   detachDragListeners()
   _dragActive = false
   _lastDropTarget = null
   _flipRects = null
   _dragTabId = null
   _dragFromSide = null
+  _organizationDragId = null
+  _organizationDropTargetKey = null
   _dragDraftSnapshot = null
   _settling = false
   document.body.style.userSelect = ''
@@ -913,7 +940,8 @@ function autoScrollFrame(): void {
   container.scrollTop += dir * speed
   // The list scrolled under the pointer — re-run the hit-test so the drop
   // placeholder follows the scroll.
-  runHitTestAndReorder(_lastPointerX, _lastPointerY)
+  if (_organizationDragId) runOrganizationDragHitTest(_lastPointerX, _lastPointerY)
+  else runHitTestAndReorder(_lastPointerX, _lastPointerY)
   // Re-evaluate edges (pointer is now relatively further from the edge) and
   // schedule the next frame when still in the zone.
   updateAutoScroll(_lastPointerX, _lastPointerY)
@@ -979,6 +1007,232 @@ function applyFLIP(prevRects: Map<string, DOMRect>, excludeTabId: string | null)
       }
     }, 220)
   })
+}
+
+/** Snapshot every visible organization representative for Configure Tabs FLIP. */
+function snapshotOrganizationFLIPRects(): Map<string, DOMRect> {
+  const rects = new Map<string, DOMRect>()
+  for (const el of document.querySelectorAll<HTMLElement>('[data-organization-drag-id]')) {
+    const id = el.getAttribute('data-organization-drag-id')
+    if (id) rects.set(id, el.getBoundingClientRect())
+  }
+  return rects
+}
+
+/** Animate organization rows with the same quick ease used by Canvas 2.0. */
+function applyOrganizationFLIP(prevRects: Map<string, DOMRect>, excludeId: string): void {
+  const current = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+  const nextRects = new Map<string, DOMRect>()
+  for (const el of current) {
+    const id = el.getAttribute('data-organization-drag-id')
+    if (id) nextRects.set(id, el.getBoundingClientRect())
+  }
+  const animated: HTMLElement[] = []
+  for (const node of current) {
+    const id = node.getAttribute('data-organization-drag-id')
+    if (!id || id === excludeId || !prevRects.has(id)) continue
+    const prev = prevRects.get(id)!, curr = nextRects.get(id)!
+    const dx = prev.left - curr.left, dy = prev.top - curr.top
+    if (Math.abs(dx) <= 0.5 && Math.abs(dy) <= 0.5) continue
+    // A folder moves its descendants with it. Animating both the container
+    // and its children would double the apparent movement.
+    let parent = node.parentElement?.closest<HTMLElement>('[data-organization-drag-id]') ?? null
+    let carriedByMovingFolder = false
+    while (parent) {
+      const parentId = parent.getAttribute('data-organization-drag-id')
+      const before = parentId ? prevRects.get(parentId) : null
+      const after = parentId ? nextRects.get(parentId) : null
+      if (before && after && (Math.abs(before.left - after.left) > 0.5 || Math.abs(before.top - after.top) > 0.5)) {
+        carriedByMovingFolder = true
+        break
+      }
+      parent = parent.parentElement?.closest<HTMLElement>('[data-organization-drag-id]') ?? null
+    }
+    if (carriedByMovingFolder) continue
+    node.style.transition = 'none'
+    node.style.transform = `translate(${dx}px, ${dy}px)`
+    animated.push(node)
+  }
+  if (!animated.length) return
+  void document.body.offsetHeight
+  const generation = ++_organizationFlipGeneration
+  requestAnimationFrame(() => {
+    for (const node of animated) {
+      _organizationFlipTokens.set(node, generation)
+      node.style.transition = 'transform 200ms cubic-bezier(0.25, 1, 0.5, 1)'
+      node.style.transform = ''
+      setTimeout(() => {
+        if (_organizationFlipTokens.get(node) !== generation) return
+        node.style.transition = ''
+        _organizationFlipTokens.delete(node)
+      }, 220)
+    }
+  })
+}
+
+function organizationDragSurface(id: string): HTMLElement | null {
+  const item = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+    .find(el => el.getAttribute('data-organization-drag-id') === id)
+  if (!item) return null
+  // The folder's children remain in the placeholder, while its compact header
+  // follows the pointer. Tabs use their complete visible card.
+  if (item.getAttribute('data-organization-drag-kind') === 'folder' || item.getAttribute('data-organization-drag-kind') === 'divider') {
+    return item.querySelector<HTMLElement>('.canvas-organization-row')
+  }
+  return item
+}
+
+function createOrganizationDragOverlay(id: string): HTMLElement | null {
+  const source = organizationDragSurface(id)
+  const item = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+    .find(el => el.getAttribute('data-organization-drag-id') === id)
+  if (!source || !item) return null
+  const overlay = source.cloneNode(true) as HTMLElement
+  overlay.className = 'canvas-configure-tabs-overlay-clone'
+  const rect = source.getBoundingClientRect()
+  overlay.style.width = `${rect.width}px`
+  overlay.style.height = `${rect.height}px`
+  overlay.style.left = `${rect.left}px`
+  overlay.style.top = `${rect.top}px`
+  // Keep the clone inert and out of all organization hit-tests/settle lookup.
+  for (const el of [overlay, ...Array.from(overlay.querySelectorAll<HTMLElement>('*'))]) {
+    el.removeAttribute('data-organization-ref')
+    el.removeAttribute('data-organization-drag-id')
+    el.removeAttribute('data-organization-parent')
+    el.removeAttribute('data-organization-index')
+    el.removeAttribute('data-organization-id')
+    el.removeAttribute('data-tab-id')
+  }
+  for (const control of overlay.querySelectorAll<HTMLElement>('button,input,textarea,select')) control.style.pointerEvents = 'none'
+  document.body.appendChild(overlay)
+  return overlay
+}
+
+function resolveOrganizationSettleDestination(id: string): { left: number; top: number } | null {
+  const item = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+    .find(el => el.getAttribute('data-organization-drag-id') === id)
+  if (!item) return null
+  const rect = item.getBoundingClientRect()
+  return { left: rect.left, top: rect.top }
+}
+
+function organizationLocation(organization: Organization, id: string): { side: ColumnSide; parent?: string; index: number; item: OrganizationItem } | null {
+  for (const side of ['primary', 'secondary'] as const) {
+    const root = organization[side]
+    const rootIndex = root.findIndex(item => itemId(item) === id)
+    if (rootIndex >= 0) return { side, index: rootIndex, item: root[rootIndex]! }
+    for (const folder of root) {
+      if (folder.type !== 'folder') continue
+      const childIndex = folder.children.findIndex(ref => referenceId(ref) === id)
+      if (childIndex >= 0) return { side, parent: folder.id, index: childIndex, item: { type: 'tab', ...folder.children[childIndex]! } }
+    }
+  }
+  return null
+}
+
+function configureDraftWithOrganization(organization: Organization): ConfigureDraft | null {
+  if (!_draftRef) return null
+  const host = getHost()
+  const ids = (side: ColumnSide) => references(organization[side]).flatMap(ref => ref.key && host?.resolve(ref.key) && host.findKey(host.resolve(ref.key)!) ? [host.resolve(ref.key)!] : [])
+  const primaryIds = ids('primary'), secondaryIds = ids('secondary')
+  const allIds = [...primaryIds, ...secondaryIds]
+  return { ..._draftRef, organization, primaryIds, secondaryIds,
+    builtinOrder: allIds.filter(id => _catalogRef.find(tab => tab.id === id)?.kind === 'builtin'),
+    extensionOrder: allIds.filter(id => _catalogRef.find(tab => tab.id === id)?.kind !== 'builtin') }
+}
+
+function installOrganizationPreview(organization: Organization): void {
+  const next = configureDraftWithOrganization(organization)
+  if (!next) return
+  _draftRef = next
+  renderModal(next, _catalogRef, null, false)
+}
+
+function runOrganizationDragHitTest(x: number, y: number): void {
+  const id = _organizationDragId
+  const organization = _draftRef?.organization
+  if (!id || !_dragActive || !organization || _settling) return
+  const pointed = document.elementFromPoint(x, y)
+  const list = pointed?.closest<HTMLElement>('.canvas-configure-tabs-list[data-side]')
+  const side = list?.getAttribute('data-side') as ColumnSide | null
+  if (!list || (side !== 'primary' && side !== 'secondary')) return
+
+  const source = organizationLocation(organization, id)
+  if (!source) return
+  const hit = pointed?.closest<HTMLElement>('[data-organization-ref]')
+  let destination: { side: ColumnSide; index: number; folder?: string }
+  let dwellFolder: string | null = null
+  if (!hit) {
+    const siblings = organization[side].filter(item => itemId(item) !== id)
+    destination = { side, index: siblings.length }
+  } else {
+    const hitId = hit.getAttribute('data-organization-ref')!
+    if (hitId === id) {
+      // The source slot stays hit-testable while transparent. Treat it as its
+      // current post-removal position so dragging through that slot can leave
+      // it again without sticking.
+      destination = { side: source.side, index: source.index, ...(source.parent ? { folder: source.parent } : {}) }
+    } else {
+      const parent = hit.getAttribute('data-organization-parent') || undefined
+      const targetItem = organization[side].find(item => itemId(item) === hitId)
+      const rect = hit.getBoundingClientRect()
+      const fraction = rect.height ? (y - rect.top) / rect.height : 0.5
+      if (!parent && targetItem?.type === 'folder' && source.item.type === 'tab' && fraction >= 0.3 && fraction <= 0.7) {
+        const children = targetItem.children.filter(ref => referenceId(ref) !== id)
+        destination = { side, index: children.length, folder: targetItem.id }
+        dwellFolder = targetItem.id
+      } else {
+        let siblings: OrganizationItem[]
+        if (parent) {
+          const folder = organization[side].find(item => item.type === 'folder' && item.id === parent)
+          siblings = folder?.type === 'folder' ? folder.children.map((ref): OrganizationItem => ({ type: 'tab', ...ref })) : []
+        } else siblings = [...organization[side]]
+        const filtered = siblings.filter(item => itemId(item) !== id)
+        const targetIndex = filtered.findIndex(item => itemId(item) === hitId)
+        const after = fraction > 0.5
+        destination = { side, index: targetIndex < 0 ? filtered.length : targetIndex + (after ? 1 : 0), ...(parent ? { folder: parent } : {}) }
+      }
+    }
+  }
+
+  if (_organizationFolderDwell !== null && _organizationFolderDwellId !== dwellFolder) {
+    clearTimeout(_organizationFolderDwell)
+    _organizationFolderDwell = null
+    _organizationFolderDwellId = null
+  }
+  if (dwellFolder && _organizationFolderDwell === null) {
+    const folderId = dwellFolder
+    _organizationFolderDwellId = folderId
+    const folderNode = Array.from(list.querySelectorAll<HTMLElement>('[data-organization-id]')).find(el => el.getAttribute('data-organization-id') === folderId)
+    const disclosure = folderNode?.querySelector<HTMLButtonElement>('.canvas-organization-disclosure[aria-expanded="false"]')
+    if (disclosure) _organizationFolderDwell = setTimeout(() => {
+      _organizationFolderDwell = null
+      _organizationFolderDwellId = null
+      if (_organizationDragId !== id || !_dragActive) return
+      disclosure.click()
+      requestAnimationFrame(() => runOrganizationDragHitTest(_lastPointerX, _lastPointerY))
+    }, 650)
+  }
+
+  const key = `${destination.side}|${destination.folder ?? ''}|${destination.index}`
+  if (_organizationDropTargetKey === key) return
+  _organizationDropTargetKey = key
+  const nextOrganization = relocateOrganizationPreview(organization, id, destination)
+  if (!nextOrganization) return
+  const prevRects = snapshotOrganizationFLIPRects()
+  installOrganizationPreview(nextOrganization)
+  applyOrganizationFLIP(prevRects, id)
+  const active = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+    .find(el => el.getAttribute('data-organization-drag-id') === id)
+  active?.classList.add('canvas-organization-dragging')
+}
+
+function relocateOrganizationPreview(organization: Organization, id: string, destination: { side: ColumnSide; index: number; folder?: string }): Organization | null {
+  const source = organizationLocation(organization, id)
+  if (!source) return null
+  if (source.side === destination.side && source.parent === destination.folder && source.index === destination.index) return null
+  const next = relocateOrganizationItem(organization, id, destination.side, destination.index, destination.folder)
+  return next === organization ? null : next
 }
 
 /**
@@ -1335,6 +1589,98 @@ function ConfigureTabsModalInner(props: ModalProps) {
     document.addEventListener('pointercancel', onUp)
   }, [])
 
+  /** Canvas 2.0 pointer drag path, extended to organization tabs and containers. */
+  const handleOrganizationPointerDown = useCallback((e: PointerEvent, id: string, side: ColumnSide) => {
+    if (e.button !== 0 || _settling || _dragTabId) return
+    e.preventDefault()
+
+    _dragTabId = id
+    _organizationDragId = id
+    _dragFromSide = side
+    _dragActive = false
+    _dragStartX = e.clientX
+    _dragStartY = e.clientY
+    _lastDropTarget = null
+    _organizationDropTargetKey = null
+    _dragDraftSnapshot = _draftRef ? cloneConfigureDraft(_draftRef) : null
+
+    const onMove = (ev: PointerEvent) => {
+      if (_settling) return
+      const distance = Math.hypot(ev.clientX - _dragStartX, ev.clientY - _dragStartY)
+      if (!_dragActive) {
+        if (distance < 4) return
+        _dragActive = true
+        document.body.style.userSelect = 'none'
+        document.body.style.cursor = 'grabbing'
+        const source = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+          .find(el => el.getAttribute('data-organization-drag-id') === id)
+        const surface = organizationDragSurface(id)
+        if (!source || !surface) return
+        const rect = surface.getBoundingClientRect()
+        _dragOffsetX = ev.clientX - rect.left
+        _dragOffsetY = ev.clientY - rect.top
+        source.classList.add('canvas-organization-dragging')
+        _dragOverlay = createOrganizationDragOverlay(id)
+      }
+
+      if (_dragOverlay) {
+        _dragOverlay.style.left = `${ev.clientX - _dragOffsetX}px`
+        _dragOverlay.style.top = `${ev.clientY - _dragOffsetY}px`
+      }
+      _lastPointerX = ev.clientX
+      _lastPointerY = ev.clientY
+      updateAutoScroll(ev.clientX, ev.clientY)
+      runOrganizationDragHitTest(ev.clientX, ev.clientY)
+    }
+
+    const onUp = async () => {
+      detachDragListeners()
+      stopAutoScroll()
+      if (!_dragActive) {
+        clearDragState()
+        return
+      }
+      if (_organizationFolderDwell !== null) {
+        clearTimeout(_organizationFolderDwell)
+        _organizationFolderDwell = null
+      }
+      _organizationFolderDwellId = null
+      // Pointer release is the commit intent. Escape during the settle keeps it.
+      _dragDraftSnapshot = null
+      try {
+        const dragId = _organizationDragId
+        if (_dragOverlay && dragId) {
+          const location = _draftRef?.organization ? organizationLocation(_draftRef.organization, dragId) : null
+          if (location?.parent) {
+            const folder = Array.from(document.querySelectorAll<HTMLElement>('[data-organization-id]'))
+              .find(el => el.getAttribute('data-organization-id') === location.parent)
+            const disclosure = folder?.querySelector<HTMLButtonElement>('.canvas-organization-disclosure[aria-expanded="false"]')
+            if (disclosure) {
+              const previousRects = snapshotOrganizationFLIPRects()
+              disclosure.click()
+              await new Promise<void>(resolve => requestAnimationFrame(() => resolve()))
+              if (_organizationDragId !== dragId) return
+              applyOrganizationFLIP(previousRects, dragId)
+              Array.from(document.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+                .find(el => el.getAttribute('data-organization-drag-id') === dragId)?.classList.add('canvas-organization-dragging')
+            }
+          }
+          const destination = resolveOrganizationSettleDestination(dragId)
+          if (destination) await animateOverlaySettle(destination.left, destination.top)
+        }
+      } finally {
+        clearDragState()
+        void autoCommit()
+      }
+    }
+
+    _dragMoveHandler = onMove
+    _dragUpHandler = onUp
+    document.addEventListener('pointermove', onMove, { passive: false })
+    document.addEventListener('pointerup', onUp)
+    document.addEventListener('pointercancel', onUp)
+  }, [])
+
   // ── Render helpers ──
 
   /** Get the icon markup for a tab row. */
@@ -1454,13 +1800,9 @@ function ConfigureTabsModalInner(props: ModalProps) {
 
   const renderColumn = (tabs: CatalogTab[], side: ColumnSide, title: string, desc: string) => (
     <div class="canvas-configure-tabs-column">
-      {draft.organization ? <ConfigureOrganization organization={draft.organization} side={side} tabs={catalog} renderTab={renderTabRow} renderHeader={actions => renderColumnHeader(title, desc, actions)} onChange={organization => {
-        if (!_draftRef) return
-        const host = getHost()
-        const ids = (side: ColumnSide) => references(organization[side]).flatMap(ref => ref.key && host?.resolve(ref.key) && host.findKey(host.resolve(ref.key)!) ? [host.resolve(ref.key)!] : [])
-        const primaryIds = ids('primary'), secondaryIds = ids('secondary')
-        const allIds = [...primaryIds, ...secondaryIds]
-        const next = { ..._draftRef, organization, primaryIds, secondaryIds, builtinOrder: allIds.filter(id => catalog.find(tab => tab.id === id)?.kind === 'builtin'), extensionOrder: allIds.filter(id => catalog.find(tab => tab.id === id)?.kind !== 'builtin') }
+      {draft.organization ? <ConfigureOrganization organization={draft.organization} side={side} tabs={catalog} renderTab={renderTabRow} renderHeader={actions => renderColumnHeader(title, desc, actions)} onConfigureDragStart={handleOrganizationPointerDown} onChange={organization => {
+        const next = configureDraftWithOrganization(organization)
+        if (!next) return
         _draftRef = next; renderModal(next, _catalogRef, null, false); void autoCommit()
       }}/> : <>{renderColumnHeader(title, desc)}<div
         class="canvas-configure-tabs-list"

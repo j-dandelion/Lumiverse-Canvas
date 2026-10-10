@@ -27,19 +27,17 @@ function OrganizationName(props: { id: string; value: string; kind: 'folder' | '
 export function ConfigureOrganization(props: {
   organization: Organization; side: Side; tabs: CatalogTab[];
   onChange: (organization: Organization) => void;
+  onConfigureDragStart: (event: PointerEvent, id: string, side: Side) => void;
   renderTab: (tab: CatalogTab, index: number, side: Side) => h.JSX.Element;
   renderHeader: (actions: h.JSX.Element) => h.JSX.Element;
 }) {
-  const { organization, side, tabs, onChange, renderTab } = props
+  const { organization, side, tabs, onChange, onConfigureDragStart, renderTab } = props
   const latestOrganization = useRef(organization)
   latestOrganization.current = organization
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [iconEditor, setIconEditor] = useState<string | null>(null)
   const [actionEditor, setActionEditor] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const dwell = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const drag = useRef<string | null>(null)
-  const cleanDrag = () => { drag.current = null; if (dwell.current) clearTimeout(dwell.current); dwell.current = null }
   useEffect(() => {
     const focus = (event: Event) => {
       const id = (event as CustomEvent<string>).detail
@@ -48,7 +46,7 @@ export function ConfigureOrganization(props: {
       requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-organization-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' }))
     }
     document.addEventListener('canvas:configure-organization-focus', focus)
-    return () => { cleanDrag(); document.removeEventListener('canvas:configure-organization-focus', focus) }
+    return () => { document.removeEventListener('canvas:configure-organization-focus', focus) }
   }, [organization, side])
   const update = (id: string, patch: Partial<OrganizationItem>) => onChange({ ...organization, [side]: organization[side].map(item => itemId(item) === id ? { ...item, ...patch } : item) } as Organization)
   const move = (id: string, to: Side, index = -1, folder?: string) => {
@@ -82,16 +80,7 @@ export function ConfigureOrganization(props: {
     onChange({ ...organization, [side]: [...organization[side], item] })
     requestAnimationFrame(() => { const input = document.querySelector<HTMLInputElement>(`[data-organization-name="${id}"]`); input?.focus(); input?.select() })
   }
-  const dragHandle = (id: string) => <span class="canvas-configure-tabs-drag-handle" draggable onDragStart={e => { drag.current = id; e.dataTransfer?.setData('application/x-canvas-organization', id); if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move' }} onDragEnd={cleanDrag} title="Drag to reorder"><Icon name="grip"/></span>
-  const drop = (e: DragEvent, index: number, folder?: string) => {
-    const id = e.dataTransfer?.getData('application/x-canvas-organization') || drag.current
-    if (!id) return; e.preventDefault(); e.stopPropagation(); cleanDrag(); move(id, side, index, folder)
-  }
-  const dragOver = (e: DragEvent, folder?: string) => {
-    if (!drag.current && !e.dataTransfer?.types.includes('application/x-canvas-organization')) return
-    e.preventDefault(); e.stopPropagation()
-    if (folder && !expanded.has(folder) && !dwell.current) dwell.current = setTimeout(() => { setExpanded(new Set([...expanded, folder])); dwell.current = null }, 650)
-  }
+  const dragHandle = (id: string) => <span class="canvas-configure-tabs-drag-handle" onPointerDown={event => onConfigureDragStart(event, id, side)} title="Drag to reorder"><Icon name="grip"/></span>
   const more = (id: string, title: string) => <button type="button" class="canvas-organization-more" title="More actions" aria-label={`Actions for ${title}`} aria-expanded={actionEditor === id} aria-controls={`canvas-organization-actions-${id}`} onClick={() => setActionEditor(actionEditor === id ? null : id)}><Icon name="more"/></button>
   const actions = (id: string, index: number, parent?: string, item?: OrganizationItem) => {
     if (actionEditor !== id) return null
@@ -113,7 +102,7 @@ export function ConfigureOrganization(props: {
   const leaf = (ref: TabReference, index: number, parent?: string) => {
     const id = referenceId(ref), liveId = ref.key ? getHost()?.resolve(ref.key) : ref.tabId
     const tab = tabs.find(tab => tab.id === liveId)
-    return <div key={id} class={`canvas-organization-leaf${parent ? ' canvas-organization-child' : ''}`} data-organization-ref={id} data-organization-parent={parent} data-organization-index={index} onDragOver={e => dragOver(e)} onDrop={e => drop(e, index, parent)}>
+    return <div key={id} class={`canvas-organization-leaf${parent ? ' canvas-organization-child' : ''}`} data-organization-ref={id} data-organization-drag-id={id} data-organization-drag-kind="tab" data-organization-parent={parent} data-organization-index={index}>
       {dragHandle(id)}
       <div class="canvas-organization-existing-row">{tab ? renderTab(tab, index, side) : <div class="canvas-configure-tabs-row row-hidden"><div class="canvas-configure-tabs-row-info"><div class="canvas-configure-tabs-copy"><span class="canvas-configure-tabs-row-title">{ref.key?.split('/').pop() ?? ref.tabId}</span><p class="canvas-configure-tabs-row-description">Currently unavailable</p></div></div></div>}</div>
       {more(id, tab?.title ?? 'unavailable tab')}
@@ -121,35 +110,36 @@ export function ConfigureOrganization(props: {
     </div>
   }
   const creation = <div class="canvas-organization-create" role="group" aria-label={`Add to ${side === 'primary' ? 'main' : 'second'} drawer`}><button type="button" onClick={() => create('folder')}><Icon name="plus"/>Folder</button><button type="button" onClick={() => create('divider')}><Icon name="plus"/>Divider</button></div>
-  return <>{props.renderHeader(creation)}<div class="canvas-configure-tabs-list" data-side={side}><div class="canvas-organization-editor" onKeyDown={e => { if (e.key === 'Escape') { cleanDrag(); if (actionEditor || iconEditor) { e.preventDefault(); e.stopPropagation() }; if (actionEditor) { document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(`canvas-organization-actions-${actionEditor}`)}"]`)?.focus(); setActionEditor(null) }; if (iconEditor) { document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(`canvas-organization-icons-${iconEditor}`)}"]`)?.focus(); setIconEditor(null) } } }}>
+  return <>{props.renderHeader(creation)}<div class="canvas-configure-tabs-list" data-side={side}><div class="canvas-organization-editor" onKeyDown={e => { if (e.key === 'Escape' && (actionEditor || iconEditor)) { e.preventDefault(); e.stopPropagation() }; if (e.key === 'Escape' && actionEditor) { document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(`canvas-organization-actions-${actionEditor}`)}"]`)?.focus(); setActionEditor(null) }; if (e.key === 'Escape' && iconEditor) { document.querySelector<HTMLElement>(`[aria-controls="${CSS.escape(`canvas-organization-icons-${iconEditor}`)}"]`)?.focus(); setIconEditor(null) } }}>
     {!organization[side].length && <div class="canvas-configure-tabs-empty">No tabs assigned</div>}
     {error && <div role="alert" class="canvas-configure-tabs-error">{error}</div>}
     {organization[side].map((item, index) => {
       if (item.type === 'tab') return leaf(item, index)
       const id = itemId(item)
-      return <div key={id} class="canvas-organization-container" data-organization-id={item.id}>
-        <div class={`canvas-configure-tabs-row canvas-organization-row${item.type === 'divider' ? ' canvas-organization-divider-row' : ''}`} data-organization-ref={id} data-organization-index={index}
-          onDragOver={e => dragOver(e, item.type === 'folder' ? item.id : undefined)} onDragLeave={() => { if (dwell.current) clearTimeout(dwell.current); dwell.current = null }}
-          onDrop={e => { const box = e.currentTarget.getBoundingClientRect(); const middle = (e.clientY - box.top) / box.height; drop(e, middle > .7 ? index + 1 : index, item.type === 'folder' && middle >= .3 && middle <= .7 ? item.id : undefined) }}>
+      return item.type === 'folder' ? <div key={id} class="canvas-organization-container" data-organization-id={item.id} data-organization-drag-id={id} data-organization-drag-kind="folder" data-organization-index={index}>
+        <div class="canvas-configure-tabs-row canvas-organization-row" data-organization-ref={id} data-organization-index={index}>
           {dragHandle(id)}
-          {item.type === 'folder' ? <>
-            <button type="button" class="canvas-organization-disclosure" aria-label={`${expanded.has(item.id) ? 'Collapse' : 'Expand'} ${item.name}`} aria-expanded={expanded.has(item.id)} onClick={() => { const next = new Set(expanded); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); setExpanded(next) }}><Icon name={expanded.has(item.id) ? 'down' : 'right'}/></button>
-            <button type="button" class="canvas-organization-icon" aria-label={`Edit ${item.name} icon`} aria-expanded={iconEditor === item.id} aria-controls={`canvas-organization-icons-${item.id}`} onClick={() => setIconEditor(iconEditor === item.id ? null : item.id)} dangerouslySetInnerHTML={{ __html: folderIconSvg(item) }}/>
-            <OrganizationName id={item.id} kind="folder" value={item.name} onSave={name => update(id, { name })}/>
-            <small class="canvas-organization-count" aria-label={`${item.children.length} tabs`}>{item.children.length}</small>
-          </> : <><span class="canvas-tab-divider" aria-hidden="true"/><OrganizationName id={item.id} kind="divider" value={item.label ?? ''} onSave={label => update(id, { label })}/></>}
+          <button type="button" class="canvas-organization-disclosure" aria-label={`${expanded.has(item.id) ? 'Collapse' : 'Expand'} ${item.name}`} aria-expanded={expanded.has(item.id)} onClick={() => { const next = new Set(expanded); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); setExpanded(next) }}><Icon name={expanded.has(item.id) ? 'down' : 'right'}/></button>
+          <button type="button" class="canvas-organization-icon" aria-label={`Edit ${item.name} icon`} aria-expanded={iconEditor === item.id} aria-controls={`canvas-organization-icons-${item.id}`} onClick={() => setIconEditor(iconEditor === item.id ? null : item.id)} dangerouslySetInnerHTML={{ __html: folderIconSvg(item) }}/>
+          <OrganizationName id={item.id} kind="folder" value={item.name} onSave={name => update(id, { name })}/>
+          <small class="canvas-organization-count" aria-label={`${item.children.length} tabs`}>{item.children.length}</small>
           {more(id, item.type === 'folder' ? item.name : item.label || 'divider')}
         </div>
         {actions(id, index, undefined, item)}
-        {item.type === 'folder' && iconEditor === item.id && <div id={`canvas-organization-icons-${item.id}`} class="canvas-organization-icons" role="group" aria-label="Folder icon">
+        {iconEditor === item.id && <div id={`canvas-organization-icons-${item.id}`} class="canvas-organization-icons" role="group" aria-label="Folder icon">
           {Object.keys(FOLDER_ICONS).map(icon => <button key={icon} type="button" title={icon} aria-label={`${icon} icon`} aria-pressed={!item.customIcon && (item.icon ?? 'folder') === icon} onClick={() => update(id, { icon, customIcon: undefined })} dangerouslySetInnerHTML={{ __html: folderIconSvg({ icon }) }}/>) }
           <textarea rows={2} class="canvas-organization-svg-paste" aria-label="Paste SVG icon" placeholder="Paste an SVG icon…" onPaste={event => { event.preventDefault(); try { update(id, { customIcon: parseCustomSvg(event.clipboardData?.getData('text') ?? '') }); setError(null) } catch (err) { setError(err instanceof Error ? err.message : String(err)) } }}/>
           <label class="canvas-organization-import">Import SVG<input type="file" accept="image/svg+xml,.svg" onChange={async e => { const file = e.currentTarget.files?.[0]; if (!file) return; const generation = currentLifecycleGeneration(); try { if (file.size > 32768) throw new Error('SVG must be smaller than 32 KB.'); const text = await file.text(); if (!isLifecycleCurrent(generation) || latestOrganization.current !== organization) return; update(id, { customIcon: parseCustomSvg(text) }); setError(null) } catch (err) { if (isLifecycleCurrent(generation) && latestOrganization.current === organization) setError(err instanceof Error ? err.message : String(err)) } }}/></label>
         </div>}
-        {item.type === 'folder' && expanded.has(item.id) && item.children.map((ref, childIndex) => leaf(ref, childIndex, item.id))}
+        {expanded.has(item.id) && item.children.map((ref, childIndex) => leaf(ref, childIndex, item.id))}
+      </div> : <div key={id} class="canvas-organization-container canvas-organization-divider-container" data-organization-id={item.id} data-organization-drag-id={id} data-organization-drag-kind="divider" data-organization-index={index}>
+        <div class="canvas-configure-tabs-row canvas-organization-row canvas-organization-divider-row" data-organization-ref={id} data-organization-index={index}>
+          {dragHandle(id)}<span class="canvas-tab-divider" aria-hidden="true"/><OrganizationName id={item.id} kind="divider" value={item.label ?? ''} onSave={label => update(id, { label })}/>{more(id, item.label || 'divider')}
+        </div>
+        {actions(id, index, undefined, item)}
       </div>
     })}
-    <div class="canvas-organization-end" onDragOver={e => dragOver(e)} onDrop={e => drop(e, -1)} aria-label="End of drawer"/>
+    <div class="canvas-organization-end" aria-label="End of drawer"/>
   </div></div></>
 }
 
@@ -160,6 +150,7 @@ export const ORGANIZATION_EDITOR_CSS = `
   .canvas-organization-create button:hover,.canvas-organization-row button:hover,.canvas-organization-more:hover,.canvas-organization-action-panel button:hover { background:var(--lumiverse-primary-010);color:var(--lumiverse-text); }
   .canvas-organization-editor { display:flex;flex-direction:column;gap:8px; }
   .canvas-organization-container { display:flex;flex-direction:column;gap:6px;min-width:0; }
+  .canvas-organization-dragging { opacity:0!important; }
   .canvas-organization-leaf { display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0;border:1px solid var(--lumiverse-border,#333);border-radius:14px;background:var(--lumiverse-bg-hover,var(--lumiverse-bg));padding:0 8px; }
   .canvas-organization-leaf:has(.row-hidden) { background:transparent; }
   .canvas-organization-existing-row .canvas-configure-tabs-row { background:transparent;border:0;padding-left:4px;padding-right:4px; }
