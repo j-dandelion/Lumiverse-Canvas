@@ -16712,6 +16712,7 @@ function renderOrganizationStrip(side) {
     if (item.type === "tab") {
       const button = buttons.find((btn) => item.key && host.findKey(btn.getAttribute("data-tab-id") ?? "") === item.key);
       if (button) {
+        wanted.add(id);
         button.setAttribute("data-canvas-organization", id);
         desired.push(button);
       }

@@ -130,7 +130,14 @@ export function renderOrganizationStrip(side: Side): void {
     const id = itemId(item)
     if (item.type === 'tab') {
       const button = buttons.find(btn => item.key && host.findKey(btn.getAttribute('data-tab-id') ?? '') === item.key)
-      if (button) { button.setAttribute('data-canvas-organization', id); desired.push(button) }
+      if (button) {
+        // Root tab buttons carry this marker for live drawer dragging too.
+        // Keep them in the diff so cleanup does not remove them immediately
+        // before reinserting them and retrigger the MutationObserver forever.
+        wanted.add(id)
+        button.setAttribute('data-canvas-organization', id)
+        desired.push(button)
+      }
       continue
     }
     wanted.add(id)
