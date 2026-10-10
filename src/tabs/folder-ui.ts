@@ -51,11 +51,6 @@ export function injectFolderStyles(): void {
     [data-canvas-folder-browser] [data-canvas-os-minimize] { display:none !important; }
     .canvas-folder-button:focus-visible,.canvas-folder-child:focus-visible,.canvas-folder-toolbar button:focus-visible { outline:2px solid var(--lumiverse-primary);outline-offset:-2px; }
     .canvas-organization-error { position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:12000;padding:12px 16px;border:1px solid var(--lumiverse-border);border-radius:8px;background:var(--lumiverse-bg);color:var(--lumiverse-text); }
-    .canvas-organization-insert-before { box-shadow:inset 0 2px var(--lumiverse-primary); }
-    .canvas-organization-insert-after { box-shadow:inset 0 -2px var(--lumiverse-primary); }
-    html.sidebar-ux-location-top .canvas-organization-insert-before,html.sidebar-ux-location-bottom .canvas-organization-insert-before { box-shadow:inset 2px 0 var(--lumiverse-primary); }
-    html.sidebar-ux-location-top .canvas-organization-insert-after,html.sidebar-ux-location-bottom .canvas-organization-insert-after { box-shadow:inset -2px 0 var(--lumiverse-primary); }
-    .canvas-folder-drop { outline:2px solid var(--lumiverse-primary);outline-offset:-2px; }
     .canvas-os-start-menu__drawer-label { display:block;padding:6px 12px;color:var(--lumiverse-text-muted);font-size:11px; }
     .canvas-os-start-menu__folder { display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border:0;border-radius:8px;background:transparent;color:var(--lumiverse-text);font:inherit;text-align:left;cursor:pointer; }
     .canvas-os-start-menu__folder:hover { background:var(--lumiverse-primary-008); }

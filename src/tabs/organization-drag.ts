@@ -25,7 +25,7 @@ import { commitOrganization, showOrganizationError } from './organization-action
 import { currentLifecycleGeneration, isLifecycleCurrent } from '../lifecycle/instance'
 
 type Surface = { side: Side; container: HTMLElement; parent: HTMLElement; axis: DndAxis }
-type DropTarget = { side: Side; index: number; folder?: string; node?: HTMLElement; after?: boolean }
+type DropTarget = { side: Side; index: number; folder?: string }
 type DragSession = {
   id: string
   source: HTMLElement
@@ -45,7 +45,6 @@ type DragSession = {
   started: boolean
   target: DropTarget | null
   targetKey: string | null
-  targetNode: HTMLElement | null
   frame: number | null
   armTimer: ReturnType<typeof setTimeout> | null
   touchReady: boolean
@@ -192,13 +191,13 @@ function calculateTarget(drag: DragSession): DropTarget | null {
     if (item?.type === 'folder' && drag.sourceItem.type === 'tab' && fraction >= 0.3 && fraction <= 0.7) {
       const folder = organization[surface.side].find(candidate => candidate.type === 'folder' && candidate.id === item.id)
       if (folder?.type === 'folder') {
-        return { side: surface.side, index: folder.children.filter(ref => referenceId(ref) !== drag.id).length, folder: folder.id, node }
+        return { side: surface.side, index: folder.children.filter(ref => referenceId(ref) !== drag.id).length, folder: folder.id }
       }
     }
 
     if (center < axisMidpoint(rect, surface.axis)) {
       const index = destination.findIndex(candidate => itemId(candidate) === id)
-      return { side: surface.side, index: index >= 0 ? index : visibleBefore, node, after: false }
+      return { side: surface.side, index: index >= 0 ? index : visibleBefore }
     }
     visibleBefore++
   }
@@ -208,20 +207,7 @@ function calculateTarget(drag: DragSession): DropTarget | null {
   const lastNode = nodes[nodes.length - 1]
   const lastVisible = lastNode?.getAttribute('data-canvas-organization')
   const lastIndex = lastVisible ? destination.findIndex(item => itemId(item) === lastVisible) : -1
-  return { side: surface.side, index: lastIndex >= 0 ? lastIndex + 1 : 0, node: lastNode, after: !!lastNode }
-}
-
-function clearTargetIndicator(drag: DragSession): void {
-  drag.targetNode?.classList.remove('canvas-folder-drop', 'canvas-organization-insert-before', 'canvas-organization-insert-after')
-  drag.targetNode = null
-}
-
-function indicateTarget(drag: DragSession, target: DropTarget | null): void {
-  clearTargetIndicator(drag)
-  if (!target?.node) return
-  drag.targetNode = target.node
-  if (target.folder) drag.targetNode.classList.add('canvas-folder-drop')
-  else drag.targetNode.classList.add(target.after ? 'canvas-organization-insert-after' : 'canvas-organization-insert-before')
+  return { side: surface.side, index: lastIndex >= 0 ? lastIndex + 1 : 0 }
 }
 
 function snapshotRects(parents: HTMLElement[]): Map<string, DOMRect> {
@@ -293,12 +279,10 @@ function setDropTarget(drag: DragSession, target: DropTarget): void {
   const key = `${target.side}|${target.folder ?? ''}|${target.index}`
   if (drag.targetKey === key) {
     drag.target = target
-    indicateTarget(drag, target)
     return
   }
   drag.targetKey = key
   drag.target = target
-  indicateTarget(drag, target)
   if (target.folder) {
     const sourceSurface = getSurfaces().find(surface => surface.container.contains(drag.source))
     if (sourceSurface && drag.source.parentElement !== drag.originalParent) {
@@ -381,7 +365,6 @@ function cleanupVisuals(drag: DragSession, restore: boolean): void {
   if (restore) restoreSource(drag)
   drag.overlay?.remove()
   drag.source.classList.remove('canvas-tab-list-dnd-placeholder')
-  clearTargetIndicator(drag)
   document.body.classList.remove('canvas-tab-list-dnd-dragging')
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
@@ -459,7 +442,7 @@ function makeSession(source: HTMLElement, id: string, item: OrganizationItem, fr
     startX: event.clientX, startY: event.clientY,
     offsetX: 0, offsetY: 0, width: 0, height: 0,
     overlay: null, overlayX: 0, overlayY: 0,
-    started: false, target: null, targetKey: null, targetNode: null,
+    started: false, target: null, targetKey: null,
     frame: null, armTimer: null,
     touchReady: event.pointerType !== 'touch' && event.pointerType !== 'pen',
     generation: currentLifecycleGeneration(), cancel: false,
