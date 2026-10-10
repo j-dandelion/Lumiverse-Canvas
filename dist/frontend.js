@@ -5243,7 +5243,8 @@ var ORGANIZATION_EDITOR_CSS = `
   .canvas-organization-container { display:flex;flex-direction:column;gap:6px;min-width:0; }
   .canvas-organization-dragging { opacity:0!important; }
   .canvas-organization-leaf { display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0;border:1px solid var(--lumiverse-border,#333);border-radius:14px;background:var(--lumiverse-bg-hover,var(--lumiverse-bg));padding:0 8px; }
-  .canvas-organization-leaf:has(.row-hidden) { background:transparent; }
+  .canvas-configure-tabs-overlay-clone.canvas-organization-leaf { justify-content:flex-start;gap:2px;padding:0 8px; }
+  .canvas-organization-leaf:has(.row-hidden) { background:var(--lumiverse-bg,#1a1a2e); }
   .canvas-organization-existing-row .canvas-configure-tabs-row { background:transparent;border:0;padding-left:4px;padding-right:4px; }
   .canvas-organization-existing-row { flex:1;min-width:0; }
   .canvas-organization-existing-row .canvas-configure-tabs-drag-handle { display:none; }
@@ -5266,8 +5267,9 @@ var ORGANIZATION_EDITOR_CSS = `
   .canvas-organization-count { min-width:20px;padding:2px 5px;border-radius:5px;background:var(--lumiverse-primary-008);color:var(--lumiverse-text-muted);font-size:calc(11px * var(--lumiverse-font-scale,1));text-align:center; }
   .canvas-organization-row .canvas-organization-icon { width:30px;height:30px;border-radius:8px;background:var(--lumiverse-primary-010);color:var(--lumiverse-primary); }
   .canvas-organization-icon svg { display:block;width:18px;height:18px; }
-  .canvas-organization-divider-row { min-height:40px;padding-top:5px;padding-bottom:5px;background:transparent; }
-  .canvas-organization-editor .canvas-organization-divider-row .canvas-tab-divider { width:24px;height:1px;margin:0 6px; }
+  .canvas-organization-divider-row { min-height:40px;padding-top:5px;padding-bottom:5px;background:var(--lumiverse-bg,#1a1a2e); }
+  .canvas-organization-editor .canvas-organization-divider-row .canvas-tab-divider,
+  .canvas-configure-tabs-overlay-clone.canvas-organization-divider-row .canvas-tab-divider { width:24px;height:1px;margin:0 6px; }
   .canvas-organization-icons { display:flex;flex-wrap:wrap;gap:4px;padding:8px 12px 8px 30px; }
   .canvas-organization-icons button { display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:5px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--lumiverse-text-muted);cursor:pointer; }
   .canvas-organization-icons button:hover { background:var(--lumiverse-primary-010); }
@@ -5806,6 +5808,15 @@ var init_configure_model = __esm(() => {
   init_identity();
   init_drawer_observer();
 });
+
+// src/tabs/configure-drop-target.ts
+function insertionIndexFromMidpoints(rows, y) {
+  for (let index = 0;index < rows.length; index++) {
+    if (y < rows[index].top + rows[index].height / 2)
+      return index;
+  }
+  return rows.length;
+}
 
 // src/tabs/builtin-icons.ts
 var BUILTIN_ICON_SVGS;
@@ -13594,7 +13605,7 @@ function injectModalStyles() {
        row reads as absent; dimming keeps the disabled cue. Core rows are
        never hidden, so .row-locked keeps its tinted background. */
     .canvas-configure-tabs-row.row-hidden {
-      background: transparent;
+      background: var(--lumiverse-bg, #1a1a2e);
       opacity: 0.6;
     }
     /* Invisible slot holder while the floating clone is the visible row
@@ -14268,7 +14279,8 @@ function createOrganizationDragOverlay(id) {
   if (!source || !item)
     return null;
   const overlay = source.cloneNode(true);
-  overlay.className = "canvas-configure-tabs-overlay-clone";
+  overlay.classList.remove("canvas-organization-dragging");
+  overlay.classList.add("canvas-configure-tabs-overlay-clone");
   const rect = source.getBoundingClientRect();
   overlay.style.width = `${rect.width}px`;
   overlay.style.height = `${rect.height}px`;
@@ -14339,9 +14351,8 @@ function runOrganizationDragHitTest(x, y) {
   const organization = _draftRef?.organization;
   if (!id || !_dragActive || !organization || _settling)
     return;
-  const overlayRect = _dragOverlay?.getBoundingClientRect();
-  const hitX = overlayRect ? overlayRect.left + overlayRect.width / 2 : x;
-  const hitY = overlayRect ? overlayRect.top + overlayRect.height / 2 : y;
+  const hitX = x;
+  const hitY = y;
   const pointed = document.elementFromPoint(hitX, hitY);
   const list = pointed?.closest(".canvas-configure-tabs-list[data-side]");
   const side = list?.getAttribute("data-side");
@@ -14351,36 +14362,39 @@ function runOrganizationDragHitTest(x, y) {
   if (!source)
     return;
   const hit = pointed?.closest("[data-organization-ref]");
+  const hitId = hit?.getAttribute("data-organization-ref");
+  const folderContainer = !hit ? pointed?.closest('.canvas-organization-container[data-organization-id][data-organization-drag-kind="folder"]') : null;
+  const parent = hit?.getAttribute("data-organization-parent") || folderContainer?.getAttribute("data-organization-id") || undefined;
   let destination;
   let dwellFolder = null;
-  if (!hit) {
-    const siblings = organization[side].filter((item) => itemId(item) !== id);
-    destination = { side, index: siblings.length };
+  if (hitId === id) {
+    destination = { side: source.side, index: source.index, ...source.parent ? { folder: source.parent } : {} };
   } else {
-    const hitId = hit.getAttribute("data-organization-ref");
-    if (hitId === id) {
-      destination = { side: source.side, index: source.index, ...source.parent ? { folder: source.parent } : {} };
+    const targetItem = hitId ? organization[side].find((item) => itemId(item) === hitId) : undefined;
+    const hitRect = hit?.getBoundingClientRect();
+    const fraction = hitRect?.height ? (hitY - hitRect.top) / hitRect.height : 0.5;
+    if (!parent && targetItem?.type === "folder" && source.item.type === "tab" && fraction >= 0.3 && fraction <= 0.7) {
+      const children = targetItem.children.filter((ref) => referenceId(ref) !== id);
+      destination = { side, index: children.length, folder: targetItem.id };
+      dwellFolder = targetItem.id;
     } else {
-      const parent = hit.getAttribute("data-organization-parent") || undefined;
-      const targetItem = organization[side].find((item) => itemId(item) === hitId);
-      const rect = hit.getBoundingClientRect();
-      const fraction = rect.height ? (hitY - rect.top) / rect.height : 0.5;
-      if (!parent && targetItem?.type === "folder" && source.item.type === "tab" && fraction >= 0.3 && fraction <= 0.7) {
-        const children = targetItem.children.filter((ref) => referenceId(ref) !== id);
-        destination = { side, index: children.length, folder: targetItem.id };
-        dwellFolder = targetItem.id;
-      } else {
-        let siblings;
-        if (parent) {
-          const folder = organization[side].find((item) => item.type === "folder" && item.id === parent);
-          siblings = folder?.type === "folder" ? folder.children.map((ref) => ({ type: "tab", ...ref })) : [];
-        } else
-          siblings = [...organization[side]];
-        const filtered = siblings.filter((item) => itemId(item) !== id);
-        const targetIndex = filtered.findIndex((item) => itemId(item) === hitId);
-        const after = fraction > 0.5;
-        destination = { side, index: targetIndex < 0 ? filtered.length : targetIndex + (after ? 1 : 0), ...parent ? { folder: parent } : {} };
-      }
+      let siblings;
+      if (parent) {
+        const folder = organization[side].find((item) => item.type === "folder" && item.id === parent);
+        siblings = folder?.type === "folder" ? folder.children.map((ref) => ({ type: "tab", ...ref })) : [];
+      } else
+        siblings = [...organization[side]];
+      const filtered = siblings.filter((item) => itemId(item) !== id);
+      const dragNodes = Array.from(list.querySelectorAll("[data-organization-drag-id]"));
+      const rowRects = filtered.flatMap((item) => {
+        const node = dragNodes.find((el) => el.getAttribute("data-organization-drag-id") === itemId(item));
+        if (!node)
+          return [];
+        const rect = node.getBoundingClientRect();
+        return [{ top: rect.top, height: rect.height }];
+      });
+      const index = insertionIndexFromMidpoints(rowRects, hitY);
+      destination = { side, index, ...parent ? { folder: parent } : {} };
     }
   }
   if (_organizationFolderDwell !== null && _organizationFolderDwellId !== dwellFolder) {

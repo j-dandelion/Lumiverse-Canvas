@@ -31,6 +31,7 @@ import {
   type DrawerSide,
 } from './configure-model'
 import { getFullCatalog, filterCatalogToLive, type CatalogTab } from './configure-catalog'
+import { insertionIndexFromMidpoints } from './configure-drop-target'
 import { BUILTIN_ICON_SVGS } from './builtin-icons'
 import {
   getCanvasHiddenTabIds,
@@ -387,7 +388,7 @@ function injectModalStyles(): void {
        row reads as absent; dimming keeps the disabled cue. Core rows are
        never hidden, so .row-locked keeps its tinted background. */
     .canvas-configure-tabs-row.row-hidden {
-      background: transparent;
+      background: var(--lumiverse-bg, #1a1a2e);
       opacity: 0.6;
     }
     /* Invisible slot holder while the floating clone is the visible row
@@ -1133,7 +1134,11 @@ function createOrganizationDragOverlay(id: string): HTMLElement | null {
     .find(el => el.getAttribute('data-organization-drag-id') === id)
   if (!source || !item) return null
   const overlay = source.cloneNode(true) as HTMLElement
-  overlay.className = 'canvas-configure-tabs-overlay-clone'
+  // Keep the source layout classes so organization cards retain their exact
+  // internal spacing while floating. The tab source is already hidden for the
+  // placeholder, so remove that state from the visible clone explicitly.
+  overlay.classList.remove('canvas-organization-dragging')
+  overlay.classList.add('canvas-configure-tabs-overlay-clone')
   const rect = source.getBoundingClientRect()
   overlay.style.width = `${rect.width}px`
   overlay.style.height = `${rect.height}px`
@@ -1198,11 +1203,12 @@ function runOrganizationDragHitTest(x: number, y: number): void {
   const id = _organizationDragId
   const organization = _draftRef?.organization
   if (!id || !_dragActive || !organization || _settling) return
-  // Canvas 2.0 hit-tests the floating tab's center, not the pointer hotspot.
-  // This keeps insertion intent stable when the user grabs an outer edge.
-  const overlayRect = _dragOverlay?.getBoundingClientRect()
-  const hitX = overlayRect ? overlayRect.left + overlayRect.width / 2 : x
-  const hitY = overlayRect ? overlayRect.top + overlayRect.height / 2 : y
+  // Match Canvas 2.0 Configure Tabs: use the pointer and sibling midpoints,
+  // not elementFromPoint as the insertion rule. The latter returns the list
+  // itself in the gaps between rows, which used to turn every gap crossing
+  // into an append-to-end move.
+  const hitX = x
+  const hitY = y
   const pointed = document.elementFromPoint(hitX, hitY)
   const list = pointed?.closest<HTMLElement>('.canvas-configure-tabs-list[data-side]')
   const side = list?.getAttribute('data-side') as ColumnSide | null
@@ -1211,38 +1217,44 @@ function runOrganizationDragHitTest(x: number, y: number): void {
   const source = organizationLocation(organization, id)
   if (!source) return
   const hit = pointed?.closest<HTMLElement>('[data-organization-ref]')
-  let destination: { side: ColumnSide; index: number; folder?: string }
+  const hitId = hit?.getAttribute('data-organization-ref')
+  const folderContainer = !hit
+    ? pointed?.closest<HTMLElement>('.canvas-organization-container[data-organization-id][data-organization-drag-kind="folder"]')
+    : null
+  const parent = hit?.getAttribute('data-organization-parent')
+    || folderContainer?.getAttribute('data-organization-id')
+    || undefined
+  let destination: { side: 'primary' | 'secondary'; index: number; folder?: string }
   let dwellFolder: string | null = null
-  if (!hit) {
-    const siblings = organization[side].filter(item => itemId(item) !== id)
-    destination = { side, index: siblings.length }
+  if (hitId === id) {
+    // The source slot stays hit-testable while transparent. Treat it as its
+    // current post-removal position so dragging through that slot can leave
+    // it again without sticking.
+    destination = { side: source.side, index: source.index, ...(source.parent ? { folder: source.parent } : {}) }
   } else {
-    const hitId = hit.getAttribute('data-organization-ref')!
-    if (hitId === id) {
-      // The source slot stays hit-testable while transparent. Treat it as its
-      // current post-removal position so dragging through that slot can leave
-      // it again without sticking.
-      destination = { side: source.side, index: source.index, ...(source.parent ? { folder: source.parent } : {}) }
+    const targetItem = hitId ? organization[side].find(item => itemId(item) === hitId) : undefined
+    const hitRect = hit?.getBoundingClientRect()
+    const fraction = hitRect?.height ? (hitY - hitRect.top) / hitRect.height : 0.5
+    if (!parent && targetItem?.type === 'folder' && source.item.type === 'tab' && fraction >= 0.3 && fraction <= 0.7) {
+      const children = targetItem.children.filter(ref => referenceId(ref) !== id)
+      destination = { side, index: children.length, folder: targetItem.id }
+      dwellFolder = targetItem.id
     } else {
-      const parent = hit.getAttribute('data-organization-parent') || undefined
-      const targetItem = organization[side].find(item => itemId(item) === hitId)
-      const rect = hit.getBoundingClientRect()
-      const fraction = rect.height ? (hitY - rect.top) / rect.height : 0.5
-      if (!parent && targetItem?.type === 'folder' && source.item.type === 'tab' && fraction >= 0.3 && fraction <= 0.7) {
-        const children = targetItem.children.filter(ref => referenceId(ref) !== id)
-        destination = { side, index: children.length, folder: targetItem.id }
-        dwellFolder = targetItem.id
-      } else {
-        let siblings: OrganizationItem[]
-        if (parent) {
-          const folder = organization[side].find(item => item.type === 'folder' && item.id === parent)
-          siblings = folder?.type === 'folder' ? folder.children.map((ref): OrganizationItem => ({ type: 'tab', ...ref })) : []
-        } else siblings = [...organization[side]]
-        const filtered = siblings.filter(item => itemId(item) !== id)
-        const targetIndex = filtered.findIndex(item => itemId(item) === hitId)
-        const after = fraction > 0.5
-        destination = { side, index: targetIndex < 0 ? filtered.length : targetIndex + (after ? 1 : 0), ...(parent ? { folder: parent } : {}) }
-      }
+      let siblings: OrganizationItem[]
+      if (parent) {
+        const folder = organization[side].find(item => item.type === 'folder' && item.id === parent)
+        siblings = folder?.type === 'folder' ? folder.children.map((ref): OrganizationItem => ({ type: 'tab', ...ref })) : []
+      } else siblings = [...organization[side]]
+      const filtered = siblings.filter(item => itemId(item) !== id)
+      const dragNodes = Array.from(list.querySelectorAll<HTMLElement>('[data-organization-drag-id]'))
+      const rowRects = filtered.flatMap(item => {
+        const node = dragNodes.find(el => el.getAttribute('data-organization-drag-id') === itemId(item))
+        if (!node) return []
+        const rect = node.getBoundingClientRect()
+        return [{ top: rect.top, height: rect.height }]
+      })
+      const index = insertionIndexFromMidpoints(rowRects, hitY)
+      destination = { side, index, ...(parent ? { folder: parent } : {}) }
     }
   }
 

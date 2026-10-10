@@ -152,7 +152,8 @@ export const ORGANIZATION_EDITOR_CSS = `
   .canvas-organization-container { display:flex;flex-direction:column;gap:6px;min-width:0; }
   .canvas-organization-dragging { opacity:0!important; }
   .canvas-organization-leaf { display:flex;flex-wrap:wrap;align-items:center;gap:2px;min-width:0;border:1px solid var(--lumiverse-border,#333);border-radius:14px;background:var(--lumiverse-bg-hover,var(--lumiverse-bg));padding:0 8px; }
-  .canvas-organization-leaf:has(.row-hidden) { background:transparent; }
+  .canvas-configure-tabs-overlay-clone.canvas-organization-leaf { justify-content:flex-start;gap:2px;padding:0 8px; }
+  .canvas-organization-leaf:has(.row-hidden) { background:var(--lumiverse-bg,#1a1a2e); }
   .canvas-organization-existing-row .canvas-configure-tabs-row { background:transparent;border:0;padding-left:4px;padding-right:4px; }
   .canvas-organization-existing-row { flex:1;min-width:0; }
   .canvas-organization-existing-row .canvas-configure-tabs-drag-handle { display:none; }
@@ -175,8 +176,9 @@ export const ORGANIZATION_EDITOR_CSS = `
   .canvas-organization-count { min-width:20px;padding:2px 5px;border-radius:5px;background:var(--lumiverse-primary-008);color:var(--lumiverse-text-muted);font-size:calc(11px * var(--lumiverse-font-scale,1));text-align:center; }
   .canvas-organization-row .canvas-organization-icon { width:30px;height:30px;border-radius:8px;background:var(--lumiverse-primary-010);color:var(--lumiverse-primary); }
   .canvas-organization-icon svg { display:block;width:18px;height:18px; }
-  .canvas-organization-divider-row { min-height:40px;padding-top:5px;padding-bottom:5px;background:transparent; }
-  .canvas-organization-editor .canvas-organization-divider-row .canvas-tab-divider { width:24px;height:1px;margin:0 6px; }
+  .canvas-organization-divider-row { min-height:40px;padding-top:5px;padding-bottom:5px;background:var(--lumiverse-bg,#1a1a2e); }
+  .canvas-organization-editor .canvas-organization-divider-row .canvas-tab-divider,
+  .canvas-configure-tabs-overlay-clone.canvas-organization-divider-row .canvas-tab-divider { width:24px;height:1px;margin:0 6px; }
   .canvas-organization-icons { display:flex;flex-wrap:wrap;gap:4px;padding:8px 12px 8px 30px; }
   .canvas-organization-icons button { display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:5px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--lumiverse-text-muted);cursor:pointer; }
   .canvas-organization-icons button:hover { background:var(--lumiverse-primary-010); }
